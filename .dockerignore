@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+node_modules
+dashboard/node_modules
+dist
+dashboard/.next
+sessions
+logs
+temp
+storage
+*.log
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+features list.txt

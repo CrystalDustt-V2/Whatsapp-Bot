@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Hybrid Bot - Auth</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+
+        .status {
+            padding: 12px 20px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            font-weight: 600;
+        }
+
+        .status.disconnected {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .qr-container {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 25px 0;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #qr-image {
+            max-width: 250px;
+            max-height: 250px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+
+        .waiting-text {
+            color: #666;
+            font-size: 16px;
+        }
+
+        .instructions {
+            text-align: left;
+            background: #f0f4ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 25px;
+        }
+
+        .instructions h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .instructions ol {
+            color: #333;
+            margin-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 10px;
+            line-height: 1.6;
+        }
+
+        .features {
+            margin-top: 25px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .feature {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 WhatsApp Hybrid Bot</h1>
+        <p class="subtitle">Connect your WhatsApp account to get started</p>
+        
+        <div id="status" class="status disconnected">
+            Status: Waiting for QR Code...
+        </div>
+
+        <div class="qr-container">
+            <div id="waiting">
+                <p class="waiting-text">Generating QR Code...</p>
+                <p style="color: #999; margin-top: 10px; font-size: 14px;">Please wait...</p>
+            </div>
+            <img id="qr-image" class="hidden" alt="WhatsApp QR Code">
+            <div id="connected-message" class="hidden">
+                <h2 style="color: #28a745; margin-bottom: 10px;">✅ Connected!</h2>
+                <p style="color: #666;">Your WhatsApp is now connected!</p>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <h3>📋 How to Connect</h3>
+            <ol>
+                <li>Open <strong>WhatsApp</strong> on your phone</li>
+                <li>Go to <strong>Settings</strong> → <strong>Linked Devices</strong></li>
+                <li>Tap <strong>Link a Device</strong></li>
+                <li>Scan the <strong>QR code</strong> above</li>
+            </ol>
+        </div>
+
+        <div class="features">
+            <div class="feature">🎮 Fun Commands</div>
+            <div class="feature">🎨 Sticker Filters</div>
+            <div class="feature">🖼️ Image Editing</div>
+            <div class="feature">🔧 Utility Tools</div>
+        </div>
+    </div>
+
+    <script>
+        const statusElement = document.getElementById('status');
+        const qrImage = document.getElementById('qr-image');
+        const waitingDiv = document.getElementById('waiting');
+        const connectedMessage = document.getElementById('connected-message');
+
+        async function checkStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (data.status === 'connected') {
+                    statusElement.textContent = 'Status: Connected!';
+                    statusElement.className = 'status connected';
+                    qrImage.classList.add('hidden');
+                    waitingDiv.classList.add('hidden');
+                    connectedMessage.classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error('Error checking status:', err);
+            }
+        }
+
+        async function fetchQR() {
+            try {
+                const response = await fetch('/api/auth/qr');
+                if (response.ok) {
+                    const data = await response.json();
+                    qrImage.src = data.qr;
+                    qrImage.classList.remove('hidden');
+                    waitingDiv.classList.add('hidden');
+                    statusElement.textContent = 'Status: Scan QR Code to Connect';
+                }
+            } catch (err) {
+                console.log('QR not ready yet...');
+            }
+        }
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}`;
+            const socket = io(wsUrl);
+            
+            socket.on('connect', () => {
+                console.log('WebSocket connected');
+            });
+
+            socket.on('auth:qr', (data) => {
+                qrImage.src = data.qr;
+                qrImage.classList.remove('hidden');
+                waitingDiv.classList.add('hidden');
+                statusElement.textContent = 'Status: Scan QR Code to Connect';
+            });
+
+            socket.on('bot:connected', () => {
+                statusElement.textContent = 'Status: Connected!';
+                statusElement.className = 'status connected';
+                qrImage.classList.add('hidden');
+                waitingDiv.classList.add('hidden');
+                connectedMessage.classList.remove('hidden');
+            });
+        }
+
+        checkStatus();
+        fetchQR();
+        setInterval(fetchQR, 2000);
+        connectWebSocket();
+    </script>
+</body>
+</html>

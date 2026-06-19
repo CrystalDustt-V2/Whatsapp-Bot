@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  bot:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+    volumes:
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    restart: unless-stopped
+
+volumes:
+  redis_data:

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+sessions/
+logs/
+temp/
+.env
+*.log
+.DS_Store
+coverage/
+/features list.txt
+/notes.txt
+
+/src/generated/prisma
