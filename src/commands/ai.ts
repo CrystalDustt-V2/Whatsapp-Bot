@@ -396,34 +396,34 @@ async function generateAudio(ctx: BotContext, input: string): Promise<string> {
   const startedAt = Date.now();
   const audio = IS_TTS_POLLINATIONS
     ? await fetchBinary(
-        `https://gen.pollinations.ai/audio/${encodeURIComponent(input.slice(0, 4000))}?${new URLSearchParams({
-          model: AI_TTS_MODEL,
-          voice: AI_TTS_VOICE,
-        })}`,
-        'audio',
-        AI_TTS_API_KEY
-      )
+      `https://gen.pollinations.ai/audio/${encodeURIComponent(input.slice(0, 4000))}?${new URLSearchParams({
+        model: AI_TTS_MODEL,
+        voice: AI_TTS_VOICE,
+      })}`,
+      'audio',
+      AI_TTS_API_KEY
+    )
     : await (async () => {
-        const response = await fetch(`${AI_TTS_API_BASE_URL}/audio/speech`, {
-          method: 'POST',
-          headers: headers(AI_TTS_API_BASE_URL, AI_TTS_API_KEY),
-          body: JSON.stringify({
-            model: AI_TTS_MODEL,
-            input: input.slice(0, 4000),
-            voice: AI_TTS_VOICE,
-            response_format: 'mp3',
-          }),
-        });
+      const response = await fetch(`${AI_TTS_API_BASE_URL}/audio/speech`, {
+        method: 'POST',
+        headers: headers(AI_TTS_API_BASE_URL, AI_TTS_API_KEY),
+        body: JSON.stringify({
+          model: AI_TTS_MODEL,
+          input: input.slice(0, 4000),
+          voice: AI_TTS_VOICE,
+          response_format: 'mp3',
+        }),
+      });
 
-        if (!response.ok) {
-          const body = await response.text();
-          aiDebug({ status: response.status, ms: Date.now() - startedAt, body: snippet(body) }, 'audio provider failed');
-          throw new Error(`HTTP ${response.status}: ${snippet(body)}`);
-        }
+      if (!response.ok) {
+        const body = await response.text();
+        aiDebug({ status: response.status, ms: Date.now() - startedAt, body: snippet(body) }, 'audio provider failed');
+        throw new Error(`HTTP ${response.status}: ${snippet(body)}`);
+      }
 
-        aiDebug({ status: response.status, ms: Date.now() - startedAt }, 'audio provider response');
-        return { buffer: Buffer.from(await response.arrayBuffer()), contentType: 'audio/mpeg' };
-      })();
+      aiDebug({ status: response.status, ms: Date.now() - startedAt }, 'audio provider response');
+      return { buffer: Buffer.from(await response.arrayBuffer()), contentType: 'audio/mpeg' };
+    })();
 
   await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
     audio: audio.buffer,
@@ -538,7 +538,7 @@ export const AiCommand: Command = {
   name: 'ai',
   aliases: ['ask'],
   category: CommandCategory.AI,
-  description: 'Ask "CrystalDust V0" AI or let it use bot commands',
+  description: '[UNFINISHED, EXPERIMENTAL] Ask "CrystalDust V0" AI or let it use bot commands',
   usage: 'ai <message>',
   async execute(ctx) {
     const input = ctx.args.join(' ').trim();

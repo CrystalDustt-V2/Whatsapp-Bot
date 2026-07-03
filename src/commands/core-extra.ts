@@ -1,7 +1,7 @@
 import config from '../config';
 import { commandRegistry } from '../core/command-registry';
-import { Command, CommandCategory } from '../types';
 import { getBotInfo } from '../services/bot-info';
+import { Command, CommandCategory } from '../types';
 
 export const BotCommand: Command = {
   name: 'bot',
@@ -18,13 +18,13 @@ export const BotCommand: Command = {
 
     await ctx.reply(
       `*CrystalDust V0*\n` +
-        `This is a WhatsApp half-bot: a normal account with some tools attached. It can help with stickers, media edits, searches, quick utilities, and AI chat when you need it.\n\n` +
-        `${ownerLine}\n\n` +
-        `Good places to start:\n` +
-        `${prefix}menu - shows the command categories. Try ${prefix}menu sticker or ${prefix}menu media when you want a specific section.\n` +
-        `${prefix}search <query> - finds related commands by name and description, so you do not have to memorize everything.\n` +
-        `${prefix}ai <message> - asks CrystalDust V0 directly. It can answer normally, and it can use bot commands when that fits.\n\n` +
-        `Commands start with "${prefix}".`
+      `This is a WhatsApp half-bot: a normal account with some tools attached. It can help with stickers, media edits, searches, quick utilities, and AI chat when you need it.\n\n` +
+      `${ownerLine}\n\n` +
+      `Good places to start:\n` +
+      `${prefix}menu - shows the command categories. Try ${prefix}menu sticker or ${prefix}menu media when you want a specific section.\n` +
+      `${prefix}search <query> - finds related commands by name and description, so you do not have to memorize everything.\n` +
+      `${prefix}ai <message> [UNFINISHED, EXPERIMENTAL] - asks CrystalDust V0 directly. It can answer normally, and it can use bot commands when that fits.\n\n` +
+      `Commands start with "${prefix}".`
     );
   },
 };
@@ -39,11 +39,11 @@ export const StatusCommand: Command = {
     const info = getBotInfo();
     await ctx.reply(
       `*Bot Status*\n` +
-        `Status: Online\n` +
-        `Uptime: ${info.uptime}\n` +
-        `Commands: ${info.commandCount}\n` +
-        `Prefix: ${info.prefix}\n` +
-        `Dashboard: ${info.dashboardUrl}`
+      `Status: Online\n` +
+      `Uptime: ${info.uptime}\n` +
+      `Commands: ${info.commandCount}\n` +
+      `Prefix: ${info.prefix}\n` +
+      `Dashboard: ${info.dashboardUrl}`
     );
   },
 };
@@ -115,11 +115,11 @@ export const RulesCommand: Command = {
   async execute(ctx) {
     await ctx.reply(
       config.RULES_TEXT ||
-        '*Rules*\n' +
-          '1. Use commands responsibly.\n' +
-          '2. Do not spam commands.\n' +
-          '3. Respect group rules and other members.\n' +
-          '4. Some features may take a moment to process.'
+      '*Rules*\n' +
+      '1. Use commands responsibly.\n' +
+      '2. Do not spam commands.\n' +
+      '3. Respect group rules and other members.\n' +
+      '4. Some features may take a moment to process.'
     );
   },
 };
@@ -133,7 +133,7 @@ export const TosCommand: Command = {
   async execute(ctx) {
     await ctx.reply(
       '*Terms of Service*\n' +
-        'This bot is provided as-is. You are responsible for how you use it, including compliance with WhatsApp rules, local laws, and group policies.'
+      'This bot is provided as-is. You are responsible for how you use it, including compliance with WhatsApp rules, local laws, and group policies.'
     );
   },
 };
