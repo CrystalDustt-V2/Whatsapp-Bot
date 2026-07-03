@@ -8,7 +8,7 @@
     "dev:watch": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "start:lunafy": "node scripts/lunafy-start.cjs",
+    "start:lunafy": "node scripts/lunafy-start.js",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },

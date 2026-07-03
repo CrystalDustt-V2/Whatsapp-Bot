@@ -10,7 +10,7 @@ Make sure these are committed and pushed:
 
 - `package.json`
 - `package-lock.json`
-- `scripts/lunafy-start.cjs`
+- `scripts/lunafy-start.js`
 - `src/`
 - `prisma/`
 - `.env.example`
@@ -73,6 +73,12 @@ Set the Lunafy startup command to:
 
 ```bash
 npm run start:lunafy
+```
+
+If you use Lunafy's default Node startup template instead of a custom command, set:
+
+```text
+Main file = scripts/lunafy-start.js
 ```
 
 That script does this on every server start:
