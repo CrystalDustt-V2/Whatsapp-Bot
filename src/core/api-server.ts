@@ -20,6 +20,7 @@ export class ApiServer {
   private io: SocketIOServer;
   private port: number;
   private authQR: string | null = null;
+  private pairingCode: string | null = null;
  
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
@@ -51,6 +52,7 @@ export class ApiServer {
   setBotSocket(socket: WASocket) {
     botSocket = socket;
     this.authQR = null;
+    this.pairingCode = null;
     this.io.emit('bot:connected', this.getStatusPayload());
     this.io.emit('status', this.getStatusPayload());
   }
@@ -65,6 +67,11 @@ export class ApiServer {
     this.authQR = qr;
     const qrDataUrl = await this.getAuthQRDataUrl();
     this.io.emit('auth:qr', { qr: qrDataUrl });
+  }
+
+  setPairingCode(code: string) {
+    this.pairingCode = code;
+    this.io.emit('auth:pairing-code', { code });
   }
  
   private setupMiddleware() {
@@ -107,6 +114,14 @@ export class ApiServer {
       const qrDataUrl = await this.getAuthQRDataUrl();
       res.json({ qr: qrDataUrl });
     });
+
+    this.app.get('/api/auth/pairing-code', (req, res) => {
+      if (!this.pairingCode) {
+        return res.status(404).json({ error: 'Pairing code not available' });
+      }
+
+      res.json({ code: this.pairingCode });
+    });
   }
  
   private setupSocketIO() {
@@ -119,6 +134,10 @@ export class ApiServer {
         this.getAuthQRDataUrl()
           .then((qrDataUrl) => socket.emit('auth:qr', { qr: qrDataUrl }))
           .catch((err) => logger.error({ err }, 'Failed to send cached QR code'));
+      }
+
+      if (this.pairingCode) {
+        socket.emit('auth:pairing-code', { code: this.pairingCode });
       }
  
       socket.on('disconnect', () => {

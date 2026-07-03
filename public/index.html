@@ -79,6 +79,21 @@
             box-shadow: 0 5px 20px rgba(0,0,0,0.1);
         }
 
+        .pairing-code {
+            color: #222;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 34px;
+            font-weight: 800;
+            letter-spacing: 6px;
+            margin-bottom: 12px;
+        }
+
+        .pairing-help {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
         .waiting-text {
             color: #666;
             font-size: 16px;
@@ -144,6 +159,10 @@
                 <p style="color: #999; margin-top: 10px; font-size: 14px;">Please wait...</p>
             </div>
             <img id="qr-image" class="hidden" alt="WhatsApp QR Code">
+            <div id="pairing-code" class="hidden">
+                <div id="pairing-code-value" class="pairing-code"></div>
+                <p class="pairing-help">Open WhatsApp → Linked Devices → Link with phone number, then enter this code.</p>
+            </div>
             <div id="connected-message" class="hidden">
                 <h2 style="color: #28a745; margin-bottom: 10px;">✅ Connected!</h2>
                 <p style="color: #666;">Your WhatsApp is now connected!</p>
@@ -156,7 +175,7 @@
                 <li>Open <strong>WhatsApp</strong> on your phone</li>
                 <li>Go to <strong>Settings</strong> → <strong>Linked Devices</strong></li>
                 <li>Tap <strong>Link a Device</strong></li>
-                <li>Scan the <strong>QR code</strong> above</li>
+                <li>Scan the <strong>QR code</strong> above, or use the phone pairing code if shown</li>
             </ol>
         </div>
 
@@ -171,8 +190,39 @@
     <script>
         const statusElement = document.getElementById('status');
         const qrImage = document.getElementById('qr-image');
+        const pairingCodeDiv = document.getElementById('pairing-code');
+        const pairingCodeValue = document.getElementById('pairing-code-value');
         const waitingDiv = document.getElementById('waiting');
         const connectedMessage = document.getElementById('connected-message');
+
+        function showConnected() {
+            statusElement.textContent = 'Status: Connected!';
+            statusElement.className = 'status connected';
+            qrImage.classList.add('hidden');
+            pairingCodeDiv.classList.add('hidden');
+            waitingDiv.classList.add('hidden');
+            connectedMessage.classList.remove('hidden');
+        }
+
+        function showQR(qr) {
+            qrImage.src = qr;
+            qrImage.classList.remove('hidden');
+            pairingCodeDiv.classList.add('hidden');
+            waitingDiv.classList.add('hidden');
+            connectedMessage.classList.add('hidden');
+            statusElement.textContent = 'Status: Scan QR Code to Connect';
+            statusElement.className = 'status disconnected';
+        }
+
+        function showPairingCode(code) {
+            pairingCodeValue.textContent = code;
+            pairingCodeDiv.classList.remove('hidden');
+            qrImage.classList.add('hidden');
+            waitingDiv.classList.add('hidden');
+            connectedMessage.classList.add('hidden');
+            statusElement.textContent = 'Status: Enter Pairing Code in WhatsApp';
+            statusElement.className = 'status disconnected';
+        }
 
         async function checkStatus() {
             try {
@@ -180,11 +230,7 @@
                 const data = await response.json();
                 
                 if (data.status === 'connected') {
-                    statusElement.textContent = 'Status: Connected!';
-                    statusElement.className = 'status connected';
-                    qrImage.classList.add('hidden');
-                    waitingDiv.classList.add('hidden');
-                    connectedMessage.classList.remove('hidden');
+                    showConnected();
                 }
             } catch (err) {
                 console.error('Error checking status:', err);
@@ -196,13 +242,22 @@
                 const response = await fetch('/api/auth/qr');
                 if (response.ok) {
                     const data = await response.json();
-                    qrImage.src = data.qr;
-                    qrImage.classList.remove('hidden');
-                    waitingDiv.classList.add('hidden');
-                    statusElement.textContent = 'Status: Scan QR Code to Connect';
+                    showQR(data.qr);
                 }
             } catch (err) {
                 console.log('QR not ready yet...');
+            }
+        }
+
+        async function fetchPairingCode() {
+            try {
+                const response = await fetch('/api/auth/pairing-code');
+                if (response.ok) {
+                    const data = await response.json();
+                    showPairingCode(data.code);
+                }
+            } catch (err) {
+                console.log('Pairing code not ready yet...');
             }
         }
 
@@ -216,24 +271,25 @@
             });
 
             socket.on('auth:qr', (data) => {
-                qrImage.src = data.qr;
-                qrImage.classList.remove('hidden');
-                waitingDiv.classList.add('hidden');
-                statusElement.textContent = 'Status: Scan QR Code to Connect';
+                showQR(data.qr);
+            });
+
+            socket.on('auth:pairing-code', (data) => {
+                showPairingCode(data.code);
             });
 
             socket.on('bot:connected', () => {
-                statusElement.textContent = 'Status: Connected!';
-                statusElement.className = 'status connected';
-                qrImage.classList.add('hidden');
-                waitingDiv.classList.add('hidden');
-                connectedMessage.classList.remove('hidden');
+                showConnected();
             });
         }
 
         checkStatus();
         fetchQR();
-        setInterval(fetchQR, 2000);
+        fetchPairingCode();
+        setInterval(() => {
+            fetchQR();
+            fetchPairingCode();
+        }, 2000);
         connectWebSocket();
     </script>
 </body>

@@ -4,11 +4,13 @@ export interface BotContext {
   socket: WASocket;
   message: WAMessage;
   args: string[];
+  rawArgs?: string;
   reply(text: string): Promise<void>;
 }
 
 export enum CommandCategory {
   CORE = 'Core',
+  AI = 'AI',
   UTILITY = 'Utility',
   DOWNLOADER = 'Downloader',
   STICKER = 'Sticker',

@@ -1,9 +1,12 @@
 import {
   checkHttp,
+  checkPort,
   getDnsRecordTypes,
   isDnsRecordType,
   lookupIp,
+  normalizeHost,
   normalizeHttpUrl,
+  parsePort,
   resolveDns,
 } from '../../services/network-tools';
 import { Command, CommandCategory } from '../../types';
@@ -86,6 +89,36 @@ export const HttpCheckCommand: Command = {
       );
     } catch (err) {
       await ctx.reply(`HTTP check failed for ${url}.`);
+    }
+  },
+};
+
+export const PortCheckCommand: Command = {
+  name: 'portcheck',
+  aliases: ['port', 'tcpcheck'],
+  category: CommandCategory.NETWORK,
+  description: 'Check if one public TCP port is open',
+  usage: 'portcheck <host> <port>',
+  async execute(ctx) {
+    const host = normalizeHost(ctx.args[0] || '');
+    const port = parsePort(ctx.args[1] || '');
+    if (!host || !port) {
+      await ctx.reply('Usage: .portcheck <host> <port>\nExample: .portcheck example.com 443');
+      return;
+    }
+
+    try {
+      const result = await checkPort(host, port);
+      await ctx.reply(
+        `Port check\n` +
+          `Host: ${result.host}\n` +
+          `Address: ${result.address}\n` +
+          `Port: ${result.port}\n` +
+          `Status: ${result.open ? 'open' : 'closed or filtered'}\n` +
+          `Time: ${result.elapsedMs}ms`
+      );
+    } catch {
+      await ctx.reply('Port check failed. Only public hosts are allowed.');
     }
   },
 };

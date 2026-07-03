@@ -2,7 +2,8 @@ FROM node:20-alpine AS base
 
 RUN apk add --no-cache \
   ffmpeg \
-  bash
+  bash \
+  yt-dlp
 
 WORKDIR /app
 

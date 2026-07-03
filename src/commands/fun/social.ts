@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import config from '../../config';
 import { randomData } from '../../services/random-data';
 import { Command, CommandCategory } from '../../types';
 
@@ -9,6 +10,24 @@ function stablePercent(input: string): number {
 
 function cleanName(value: string): string {
   return value.replace(/^@/, '').trim();
+}
+
+function normalizeName(value: string): string {
+  return cleanName(value).replace(/\s+/g, ' ').toLowerCase();
+}
+
+function isPerfectMatchPair(first: string, second: string): boolean {
+  const preferredFirst = config.PERFECT_MATCH_NAME_1;
+  const preferredSecond = config.PERFECT_MATCH_NAME_2;
+
+  if (!preferredFirst || !preferredSecond) {
+    return false;
+  }
+
+  const actualPair = [normalizeName(first), normalizeName(second)].sort();
+  const preferredPair = [normalizeName(preferredFirst), normalizeName(preferredSecond)].sort();
+
+  return actualPair[0] === preferredPair[0] && actualPair[1] === preferredPair[1];
 }
 
 export const ShipCommand: Command = {
@@ -28,6 +47,11 @@ export const ShipCommand: Command = {
 
     if (!first || !second) {
       await ctx.reply('Usage: .ship <name1> <name2>\nTip: use .ship Alice | Bob for multi-word names.');
+      return;
+    }
+
+    if (isPerfectMatchPair(first, second)) {
+      await ctx.reply(`${first} x ${second}\nShip score: 100%\nStatus: Perfect Duo`);
       return;
     }
 
@@ -53,6 +77,11 @@ export const CompatibilityCommand: Command = {
 
     if (!first || !second) {
       await ctx.reply('Usage: .compatibility <name1> <name2>\nTip: use .compat Alice | Bob for multi-word names.');
+      return;
+    }
+
+    if (isPerfectMatchPair(first, second)) {
+      await ctx.reply(`${first} and ${second}: 100% compatible`);
       return;
     }
 

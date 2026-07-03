@@ -1,6 +1,7 @@
 import {
   Browsers,
   default as makeWASocket,
+  AuthenticationState,
   DisconnectReason,
   fetchLatestWaWebVersion,
   useMultiFileAuthState,
@@ -16,6 +17,7 @@ import * as path from 'path';
 interface ConnectionManagerOptions {
   sessionPath?: string;
   onQR?: (qr: string) => Promise<void>;
+  onPairingCode?: (code: string) => Promise<void>;
   onConnected?: (socket: WASocket) => Promise<void>;
   onDisconnected?: (reason?: DisconnectReason) => Promise<void>;
 }
@@ -25,6 +27,7 @@ export class ConnectionManager {
   private options: ConnectionManagerOptions;
   private retryCount: number = 0;
   private readonly maxRetries: number = 10;
+  private pairingCodeRequested = false;
 
   constructor(options: ConnectionManagerOptions = {}) {
     this.options = {
@@ -46,10 +49,43 @@ export class ConnectionManager {
     return 5000;
   }
 
+  private async requestPairingCodeIfNeeded(state: AuthenticationState, saveCreds: () => Promise<void>): Promise<void> {
+    const phoneNumber = config.AUTH_PHONE_NUMBER?.replace(/\D/g, '');
+    if (!this.socket || !phoneNumber || state.creds.registered || this.pairingCodeRequested) return;
+
+    this.pairingCodeRequested = true;
+
+    try {
+      const code = await this.socket.requestPairingCode(phoneNumber);
+      logger.info(`Pairing code: ${code}`);
+      await this.options.onPairingCode?.(code);
+    } catch (err) {
+      if (!state.creds.registered && state.creds.me?.id === `${phoneNumber}@s.whatsapp.net`) {
+        state.creds.me = undefined;
+        state.creds.pairingCode = undefined;
+        await saveCreds();
+      }
+
+      this.pairingCodeRequested = false;
+      logger.error({ err }, 'Failed to request pairing code');
+    }
+  }
+
+  private async clearStalePairingCreds(state: AuthenticationState, saveCreds: () => Promise<void>): Promise<void> {
+    const phoneNumber = config.AUTH_PHONE_NUMBER?.replace(/\D/g, '');
+    if (!phoneNumber || state.creds.registered || state.creds.me?.id !== `${phoneNumber}@s.whatsapp.net`) return;
+
+    state.creds.me = undefined;
+    state.creds.pairingCode = undefined;
+    await saveCreds();
+  }
+
   async connect(): Promise<WASocket> {
     const { state, saveCreds } = await useMultiFileAuthState(
       this.options.sessionPath!
     );
+    await this.clearStalePairingCreds(state, saveCreds);
+
     const { version, isLatest, error } = await fetchLatestWaWebVersion({});
 
     if (error) {
@@ -64,6 +100,7 @@ export class ConnectionManager {
       browser: Browsers.macOS('Chrome'),
       markOnlineOnConnect: false,
       qrTimeout: 60000,
+      shouldIgnoreJid: (jid) => Boolean(jid && config.IGNORE_NEWSLETTER_MESSAGES && jid.endsWith('@newsletter')),
     });
 
     this.socket.ev.on('creds.update', saveCreds);
@@ -71,14 +108,18 @@ export class ConnectionManager {
     this.socket.ev.on('connection.update', async (update) => {
       const { connection, qr } = update;
 
-      if (qr && this.options.onQR) {
+      if (qr) {
         try {
-          const qrString = await qrcode.toString(qr, { type: 'terminal' });
-          logger.info('QR Code received:');
-          console.log(qrString);
-          await this.options.onQR(qr);
+          if (config.AUTH_PHONE_NUMBER) {
+            await this.requestPairingCodeIfNeeded(state, saveCreds);
+          } else if (this.options.onQR) {
+            const qrString = await qrcode.toString(qr, { type: 'terminal' });
+            logger.info('QR Code received:');
+            console.log(qrString);
+            await this.options.onQR(qr);
+          }
         } catch (err) {
-          logger.error({ err }, 'Failed to generate QR code');
+          logger.error({ err }, 'Failed to handle auth QR');
         }
       }
 

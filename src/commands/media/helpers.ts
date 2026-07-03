@@ -1,7 +1,8 @@
 import { downloadContentFromMessage, proto } from '@whiskeysockets/baileys';
+import type { MediaType } from '@whiskeysockets/baileys';
 import type { BotContext } from '../../types';
 
-export type DownloadableMediaKind = 'image' | 'video' | 'audio' | 'document';
+export type DownloadableMediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker';
 
 export interface DownloadedMedia {
   buffer: Buffer;
@@ -15,7 +16,8 @@ type AnyMediaMessage =
   | proto.Message.IImageMessage
   | proto.Message.IVideoMessage
   | proto.Message.IAudioMessage
-  | proto.Message.IDocumentMessage;
+  | proto.Message.IDocumentMessage
+  | proto.Message.IStickerMessage;
 
 function unwrapMessage(message?: proto.IMessage | null): proto.IMessage | undefined {
   if (!message) return undefined;
@@ -53,6 +55,10 @@ function getMedia(
     return { media: message.documentMessage, kind: 'document' };
   }
 
+  if (message.stickerMessage && allowedKinds.includes('sticker')) {
+    return { media: message.stickerMessage, kind: 'sticker' };
+  }
+
   return null;
 }
 
@@ -70,7 +76,7 @@ function extensionFromMedia(media: AnyMediaMessage, kind: DownloadableMediaKind)
     return mimeExtension === 'jpeg' ? 'jpg' : mimeExtension;
   }
 
-  return kind === 'image' ? 'jpg' : kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : 'bin';
+  return kind === 'image' ? 'jpg' : kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'sticker' ? 'webp' : 'bin';
 }
 
 export async function downloadMediaFromContext(
@@ -83,7 +89,7 @@ export async function downloadMediaFromContext(
 
   if (!found) return null;
 
-  const stream = await downloadContentFromMessage(found.media as any, found.kind);
+  const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
   const chunks: Buffer[] = [];
 
   for await (const chunk of stream) {

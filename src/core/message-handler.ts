@@ -3,12 +3,82 @@ import logger from './logger';
 import config from '../config';
 import { commandRegistry } from './command-registry';
 import type { BotContext } from '../types';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const MAX_SEEN_MESSAGES = 5000;
+const seenMessages = new Set<string>();
+const seenMessageOrder: string[] = [];
+const SEEN_MESSAGES_PATH = path.join(config.SESSION_PATH, 'processed-messages.json');
+
+function loadSeenMessages(): void {
+  try {
+    const messages = JSON.parse(fs.readFileSync(SEEN_MESSAGES_PATH, 'utf8')) as string[];
+    for (const key of messages.slice(-MAX_SEEN_MESSAGES)) {
+      seenMessages.add(key);
+      seenMessageOrder.push(key);
+    }
+  } catch {
+    // ponytail: missing/corrupt cache only means old commands may replay once.
+  }
+}
+
+function saveSeenMessages(): void {
+  try {
+    fs.mkdirSync(path.dirname(SEEN_MESSAGES_PATH), { recursive: true });
+    fs.writeFileSync(SEEN_MESSAGES_PATH, JSON.stringify(seenMessageOrder.slice(-MAX_SEEN_MESSAGES)));
+  } catch (err) {
+    logger.warn({ err }, 'Could not save processed message cache');
+  }
+}
+
+loadSeenMessages();
+
+function markMessageSeen(key: string): void {
+  if (seenMessages.has(key)) return;
+
+  seenMessages.add(key);
+  seenMessageOrder.push(key);
+
+  while (seenMessageOrder.length > MAX_SEEN_MESSAGES) {
+    seenMessages.delete(seenMessageOrder.shift()!);
+  }
+
+  saveSeenMessages();
+}
+
+function getTimestampSeconds(message: WAMessage): number {
+  const value = message.messageTimestamp;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint') return Number(value);
+  if (!value) return 0;
+
+  const timestamp = value as {
+    toNumber?: () => number;
+    toString?: () => string;
+    low?: number;
+    high?: number;
+  };
+
+  if (typeof timestamp.toNumber === 'function') return timestamp.toNumber();
+
+  if (typeof timestamp.low === 'number' && typeof timestamp.high === 'number') {
+    return timestamp.high * 4294967296 + (timestamp.low >>> 0);
+  }
+
+  const parsed = Number(timestamp.toString?.());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 export class MessageHandler {
   private socket: WASocket;
+  private ignoreUntilMs: number;
+  private ignoreBeforeSeconds: number;
 
-  constructor(socket: WASocket) {
+  constructor(socket: WASocket, ignoreUntilMs = Date.now() + config.STARTUP_IGNORE_MESSAGES_SECONDS * 1000) {
     this.socket = socket;
+    this.ignoreUntilMs = ignoreUntilMs;
+    this.ignoreBeforeSeconds = Math.floor(ignoreUntilMs / 1000) + config.IGNORE_OLD_MESSAGES_SECONDS;
   }
 
   private getMessageText(message: proto.IMessage): string {
@@ -56,6 +126,32 @@ export class MessageHandler {
         return;
       }
 
+      const messageKey = `${message.key.remoteJid}:${message.key.id || ''}:${message.key.participant || ''}`;
+      if (seenMessages.has(messageKey)) {
+        logger.debug({ messageId: message.key.id, remoteJid: message.key.remoteJid }, 'Skipping already processed message');
+        return;
+      }
+
+      const timestamp = getTimestampSeconds(message);
+
+      if (Date.now() < this.ignoreUntilMs) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { messageId: message.key.id, remoteJid: message.key.remoteJid, ignoreUntilMs: this.ignoreUntilMs },
+          'Skipping message during startup backlog drain'
+        );
+        return;
+      }
+
+      if (timestamp > 0 && timestamp < this.ignoreBeforeSeconds) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { messageId: message.key.id, remoteJid: message.key.remoteJid, timestamp, ignoreBeforeSeconds: this.ignoreBeforeSeconds },
+          'Skipping old message from before this connection'
+        );
+        return;
+      }
+
       const msg = message.message;
       if (!msg) {
         logger.debug(
@@ -80,8 +176,11 @@ export class MessageHandler {
         return;
       }
 
-      const args = text.slice(config.BOT_PREFIX.length).trim().split(/\s+/);
-      const commandName = args.shift()?.toLowerCase();
+      const body = text.slice(config.BOT_PREFIX.length).trim();
+      const firstSpace = body.search(/\s/);
+      const commandName = (firstSpace === -1 ? body : body.slice(0, firstSpace)).toLowerCase();
+      const rawArgs = firstSpace === -1 ? '' : body.slice(firstSpace).trim();
+      const args = rawArgs ? rawArgs.split(/\s+/) : [];
 
       if (!commandName) return;
 
@@ -94,6 +193,8 @@ export class MessageHandler {
         return;
       }
 
+      markMessageSeen(messageKey);
+
       logger.info(
         { fromMe: message.key.fromMe, remoteJid: message.key.remoteJid, messageId: message.key.id },
         `Executing command: ${commandName}`
@@ -103,6 +204,7 @@ export class MessageHandler {
         socket: this.socket,
         message,
         args,
+        rawArgs,
         reply: (replyText) => this.reply(message, replyText),
       };
 

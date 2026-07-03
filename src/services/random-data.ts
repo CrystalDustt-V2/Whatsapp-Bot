@@ -196,6 +196,8 @@ const CITIES = [
   'Denpasar',
   'Medan',
   'Balikpapan',
+  'Bima',
+  'Dompu',
 ];
 
 function pick<T>(items: T[]): T {

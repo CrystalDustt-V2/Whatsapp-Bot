@@ -9,5 +9,7 @@ temp/
 coverage/
 /features list.txt
 /notes.txt
+/runtime.env
+/openai keys.txt
 
 /src/generated/prisma

@@ -2,11 +2,30 @@ import { commandRegistry } from '../core/command-registry';
 import PingCommand from './ping';
 import HelpCommand from './help';
 import MenuCommand from './menu';
+import CommandSearchCommand from './command-search';
+import AiCommand from './ai';
 import UptimeCommand from './uptime';
 import AboutCommand from './about';
 import StickerCommand from './sticker';
 import Base64Command from './base64';
 import { CoreExtraCommands } from './core-extra';
+import {
+  AdminListCommand,
+  GroupInfoCommand,
+  GroupStatsCommand,
+  MemberListCommand,
+  TagAllCommand,
+} from './group';
+import { SearchCommands } from './search';
+import { SocialCommands } from './social';
+import { IslamicCommands } from './islamic';
+import { TikTokCommand, TikTokAudioCommand } from './tiktok';
+import {
+  YouTubeCommand,
+  SpotifyCommand,
+  SoundCloudCommand,
+  NewgroundsCommand,
+} from './music';
 import {
   reverse,
   fancy,
@@ -26,10 +45,17 @@ import {
   calc,
   dictionary,
   element,
+  formula,
+  physics,
+  currency,
   useragent,
+  shorturl,
+  renamefile,
+  tts,
   iplookup,
   dns,
   httpcheck,
+  portcheck,
 } from './utility';
 import {
   joke,
@@ -44,6 +70,10 @@ import {
   compatibility,
   roast,
   spin,
+  mathquiz,
+  trivia,
+  guessword,
+  answer,
 } from './fun';
 import {
   blur,
@@ -56,17 +86,53 @@ import {
   rotate,
   flip,
   compressimage,
+  brightness,
+  saturation,
+  contrast,
+  pixelate,
+  enhance,
+  denoise,
+  tojpg,
+  topng,
+  towebp,
+  bassboost,
+  nightcore,
+  reverb,
+  echo,
+  compressaudio,
+  vocalremover,
+  tomp3,
+  towav,
+  toogg,
+  trimvideo,
+  videospeed,
+  extractaudio,
+  videogif,
 } from './media';
 import { BlackAndWhiteStickerCommand as bwsticker } from './sticker/bwsticker';
 import { SepiaStickerCommand as sepiasticker } from './sticker/sepiasticker';
 import { VintageStickerCommand as vintagesticker } from './sticker/vintagesticker';
 import { CartoonStickerCommand as cartoonsticker } from './sticker/cartoonsticker';
 import { GlitchStickerCommand as glitchsticker } from './sticker/glitchsticker';
+import {
+  MemeStickerCommand as memesticker,
+  QuoteStickerCommand as quotesticker,
+} from './sticker/meme';
+import { StickerImageCommand as stickerimage } from './sticker/convert';
+import {
+  BorderStickerCommand as bordersticker,
+  CircleStickerCommand as circlesticker,
+  RoundedStickerCommand as roundedsticker,
+} from './sticker/shape';
+import { UrlStickerCommand as urlsticker } from './sticker/url';
+import { SbratStickerCommand as sbrat } from './sticker/sbrat';
 
 export function loadCommands(): void {
   commandRegistry.register(PingCommand);
   commandRegistry.register(HelpCommand);
   commandRegistry.register(MenuCommand);
+  commandRegistry.register(CommandSearchCommand);
+  commandRegistry.register(AiCommand);
   commandRegistry.register(UptimeCommand);
   commandRegistry.register(AboutCommand);
   for (const command of CoreExtraCommands) {
@@ -74,6 +140,26 @@ export function loadCommands(): void {
   }
   commandRegistry.register(StickerCommand);
   commandRegistry.register(Base64Command);
+  commandRegistry.register(GroupInfoCommand);
+  commandRegistry.register(AdminListCommand);
+  commandRegistry.register(MemberListCommand);
+  commandRegistry.register(GroupStatsCommand);
+  commandRegistry.register(TagAllCommand);
+  for (const command of SearchCommands) {
+    commandRegistry.register(command);
+  }
+  for (const command of SocialCommands) {
+    commandRegistry.register(command);
+  }
+  for (const command of IslamicCommands) {
+    commandRegistry.register(command);
+  }
+  commandRegistry.register(TikTokCommand);
+  commandRegistry.register(TikTokAudioCommand);
+  commandRegistry.register(YouTubeCommand);
+  commandRegistry.register(SpotifyCommand);
+  commandRegistry.register(SoundCloudCommand);
+  commandRegistry.register(NewgroundsCommand);
   commandRegistry.register(reverse);
   commandRegistry.register(fancy);
   commandRegistry.register(morse);
@@ -92,10 +178,17 @@ export function loadCommands(): void {
   commandRegistry.register(calc);
   commandRegistry.register(dictionary);
   commandRegistry.register(element);
+  commandRegistry.register(formula);
+  commandRegistry.register(physics);
+  commandRegistry.register(currency);
   commandRegistry.register(useragent);
+  commandRegistry.register(shorturl);
+  commandRegistry.register(renamefile);
+  commandRegistry.register(tts);
   commandRegistry.register(iplookup);
   commandRegistry.register(dns);
   commandRegistry.register(httpcheck);
+  commandRegistry.register(portcheck);
   commandRegistry.register(joke);
   commandRegistry.register(quote);
   commandRegistry.register(meme);
@@ -108,6 +201,10 @@ export function loadCommands(): void {
   commandRegistry.register(compatibility);
   commandRegistry.register(roast);
   commandRegistry.register(spin);
+  commandRegistry.register(mathquiz);
+  commandRegistry.register(trivia);
+  commandRegistry.register(guessword);
+  commandRegistry.register(answer);
   commandRegistry.register(blur);
   commandRegistry.register(sharpen);
   commandRegistry.register(grayscale);
@@ -118,11 +215,41 @@ export function loadCommands(): void {
   commandRegistry.register(rotate);
   commandRegistry.register(flip);
   commandRegistry.register(compressimage);
+  commandRegistry.register(brightness);
+  commandRegistry.register(saturation);
+  commandRegistry.register(contrast);
+  commandRegistry.register(pixelate);
+  commandRegistry.register(enhance);
+  commandRegistry.register(denoise);
+  commandRegistry.register(tojpg);
+  commandRegistry.register(topng);
+  commandRegistry.register(towebp);
+  commandRegistry.register(bassboost);
+  commandRegistry.register(nightcore);
+  commandRegistry.register(reverb);
+  commandRegistry.register(echo);
+  commandRegistry.register(compressaudio);
+  commandRegistry.register(vocalremover);
+  commandRegistry.register(tomp3);
+  commandRegistry.register(towav);
+  commandRegistry.register(toogg);
+  commandRegistry.register(trimvideo);
+  commandRegistry.register(videospeed);
+  commandRegistry.register(extractaudio);
+  commandRegistry.register(videogif);
   commandRegistry.register(bwsticker);
   commandRegistry.register(sepiasticker);
   commandRegistry.register(vintagesticker);
   commandRegistry.register(cartoonsticker);
   commandRegistry.register(glitchsticker);
+  commandRegistry.register(memesticker);
+  commandRegistry.register(quotesticker);
+  commandRegistry.register(stickerimage);
+  commandRegistry.register(circlesticker);
+  commandRegistry.register(roundedsticker);
+  commandRegistry.register(bordersticker);
+  commandRegistry.register(urlsticker);
+  commandRegistry.register(sbrat);
 }
 
 export default loadCommands;

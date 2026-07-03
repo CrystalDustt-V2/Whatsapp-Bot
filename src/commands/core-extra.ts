@@ -3,6 +3,32 @@ import { commandRegistry } from '../core/command-registry';
 import { Command, CommandCategory } from '../types';
 import { getBotInfo } from '../services/bot-info';
 
+export const BotCommand: Command = {
+  name: 'bot',
+  aliases: ['start', 'intro'],
+  category: CommandCategory.CORE,
+  description: 'Introduce the bot and starter commands',
+  usage: 'bot',
+  async execute(ctx) {
+    const prefix = config.BOT_PREFIX;
+    const ownerNumber = config.OWNER_NUMBER?.replace(/\D/g, '');
+    const ownerLine = ownerNumber
+      ? `Owner: ${config.OWNER_NAME} (wa.me/${ownerNumber})`
+      : `Owner: ${config.OWNER_NAME}`;
+
+    await ctx.reply(
+      `*CrystalDust V0*\n` +
+        `This is a WhatsApp half-bot: a normal account with some tools attached. It can help with stickers, media edits, searches, quick utilities, and AI chat when you need it.\n\n` +
+        `${ownerLine}\n\n` +
+        `Good places to start:\n` +
+        `${prefix}menu - shows the command categories. Try ${prefix}menu sticker or ${prefix}menu media when you want a specific section.\n` +
+        `${prefix}search <query> - finds related commands by name and description, so you do not have to memorize everything.\n` +
+        `${prefix}ai <message> - asks CrystalDust V0 directly. It can answer normally, and it can use bot commands when that fits.\n\n` +
+        `Commands start with "${prefix}".`
+    );
+  },
+};
+
 export const StatusCommand: Command = {
   name: 'status',
   aliases: ['stats', 'botstatus'],
@@ -125,6 +151,7 @@ export const SpeedCommand: Command = {
 };
 
 export const CoreExtraCommands = [
+  BotCommand,
   StatusCommand,
   DashboardCommand,
   OwnerCommand,

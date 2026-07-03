@@ -12,3 +12,9 @@ export {
   RoastCommand as roast,
   SpinWheelCommand as spin,
 } from './social';
+export {
+  MathQuizCommand as mathquiz,
+  TriviaCommand as trivia,
+  GuessWordCommand as guessword,
+  AnswerCommand as answer,
+} from './games';

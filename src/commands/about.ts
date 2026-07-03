@@ -7,12 +7,13 @@ export const AboutCommand: Command = {
   description: 'Show bot information',
   usage: 'about',
   async execute(ctx) {
-    const text = `🤖 *WhatsApp Hybrid Bot\n━━━━━━━━━━━━━━━━━━━\n\n` +
-      `📋 *Platform: WhatsApp Hybrid Bot Platform\n` +
+    const text =
+      `🤖 *CrystalDust V0*
+      \n━━━━━━━━━━━━━━━━━━━\n\n` +
+      `📋 *Platform: Windows\n` +
       `📦 *Version:* 1.0.0\n` +
-      `🛠️ *Tech Stack:* Node.js, TypeScript, Baileys\n` +
-      `━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Production-grade modular WhatsApp automation platform with hybrid operation mode!`;
+      `👤 *Owner:* CrystalDust\n` +
+      `━━━━━━━━━━━━━━━━━━━\n\n`;
 
     await ctx.socket.sendMessage(
       ctx.message.key.remoteJid!,

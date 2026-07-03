@@ -41,6 +41,10 @@ async function main() {
       logger.info(`📱 Scan with WhatsApp or open http://localhost:${config.PORT}`);
       apiServer.setAuthQR(qr);
     },
+    async onPairingCode(code) {
+      logger.info(`Link with phone number code: ${code}`);
+      apiServer.setPairingCode(code);
+    },
     async onConnected(socket) {
       logger.info('');
       logger.info('╔══════════════════════════════════════════════════════════╗');
