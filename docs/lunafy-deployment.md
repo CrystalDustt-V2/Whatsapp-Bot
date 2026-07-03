@@ -31,10 +31,10 @@ npm run build
 git status
 git add .
 git commit -m "Prepare Lunafy deployment"
-git push origin main
+git push origin master
 ```
 
-If your repo uses `master`, push `master` instead of `main`.
+This repository currently uses `master`.
 
 ## 2. Log In To Lunafy
 
@@ -62,12 +62,6 @@ https://github.com/CrystalDustt-V2/whatsapp-halfbot.git
 ```
 
 Recommended branch:
-
-```text
-main
-```
-
-If your repo currently uses `master`, use:
 
 ```text
 master
@@ -108,19 +102,14 @@ DASHBOARD_URL=https://your-lunafy-host-or-allocation
 SESSION_PATH=./sessions
 AUTO_GIT_PULL=true
 GIT_REMOTE=origin
-GIT_BRANCH=main
+GIT_BRANCH=master
 AUTO_NPM_INSTALL=true
 AUTO_PRISMA_GENERATE=true
 AUTO_BUILD=true
+BOT_ENTRY=dist/index.js
 ```
 
 If Lunafy gives you a dynamic server port, set `PORT` to that allocated port. If Lunafy exposes `SERVER_PORT`, the startup script will use that when `PORT` is empty.
-
-If your branch is `master`:
-
-```env
-GIT_BRANCH=master
-```
 
 AI/media provider env vars are optional and should be copied from `.env.example` only when you use those providers.
 
@@ -155,7 +144,7 @@ Keep the server count at one instance for one WhatsApp account.
 Push updates to GitHub:
 
 ```bash
-git push origin main
+git push origin master
 ```
 
 Then restart the Lunafy server. Because the startup command is `npm run start:lunafy`, the server pulls the latest fast-forward changes before starting the bot.

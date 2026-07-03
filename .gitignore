@@ -3,6 +3,7 @@ dist/
 sessions/
 logs/
 temp/
+.env
 *.log
 .DS_Store
 coverage/
