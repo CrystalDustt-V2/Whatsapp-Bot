@@ -78,10 +78,10 @@ npm run start:lunafy
 If you use Lunafy's default Node startup template instead of a custom command, set:
 
 ```text
-Main file = scripts/lunafy-start.ts
+Main file = index.ts
 ```
 
-Lunafy's default startup template can route even `.js` files through `ts-node`, so the `.ts` file is a tiny wrapper that loads the real `scripts/lunafy-start.js` script.
+Lunafy's default startup template can route even `.js` files through `ts-node`, so `index.ts` is a tiny wrapper that loads the real `scripts/lunafy-start.js` script.
 
 That script does this on every server start:
 
