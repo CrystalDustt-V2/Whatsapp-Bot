@@ -80,7 +80,7 @@ export function parsePort(input: string): number | null {
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
 }
 
-function isPrivateAddress(address: string): boolean {
+export function isPrivateAddress(address: string): boolean {
   if (isIP(address) === 6) {
     const lower = address.toLowerCase();
     return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:');

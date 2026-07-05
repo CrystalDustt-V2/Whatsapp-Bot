@@ -21,7 +21,7 @@ export {
 } from './education';
 export { UserAgentCommand as useragent } from './useragent';
 export { ShortUrlCommand as shorturl } from './shorturl';
-export { RenameFileCommand as renamefile } from './file';
+export { RenameFileCommand as renamefile, DownloadFileCommand as download } from './file';
 export { TextToSpeechCommand as tts } from './tts';
 export {
   TextCaseCommand as textcase,

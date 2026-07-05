@@ -1,10 +1,11 @@
 import { Command, CommandCategory } from '../types';
+import { downloadYtDlpAudio } from '../services/tiktok-downloader';
 
 type MusicPlatform = {
   name: string;
   aliases: string[];
   hostPattern: RegExp;
-  searchUrl(query: string): string;
+  searchInput(query: string): string;
 };
 
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
@@ -25,25 +26,25 @@ const platforms: Record<string, MusicPlatform> = {
     name: 'youtube-music',
     aliases: ['yt', 'youtube', 'ytmusic', 'ymusic'],
     hostPattern: /(^|\.)music\.youtube\.com$|(^|\.)youtube\.com$|(^|\.)youtu\.be$/,
-    searchUrl: (query) => `https://music.youtube.com/search?q=${encodeURIComponent(query)}`,
+    searchInput: (query) => `ytsearch1:${query}`,
   },
   spotify: {
     name: 'spotify',
     aliases: ['sp'],
     hostPattern: /(^|\.)spotify\.com$/,
-    searchUrl: (query) => `https://open.spotify.com/search/${encodeURIComponent(query)}`,
+    searchInput: (query) => `ytsearch1:${query}`,
   },
   soundcloud: {
     name: 'soundcloud',
     aliases: ['sc'],
     hostPattern: /(^|\.)soundcloud\.com$/,
-    searchUrl: (query) => `https://soundcloud.com/search?q=${encodeURIComponent(query)}`,
+    searchInput: (query) => `scsearch1:${query}`,
   },
   newgrounds: {
     name: 'newgrounds',
     aliases: ['ng', 'ngaudio'],
     hostPattern: /(^|\.)newgrounds\.com$/,
-    searchUrl: (query) => `https://www.newgrounds.com/search/conduct/audio?terms=${encodeURIComponent(query)}`,
+    searchInput: (query) => `ytsearch1:${query}`,
   },
 };
 
@@ -88,12 +89,36 @@ async function fetchAudio(url: string): Promise<{ buffer: Buffer; mimetype: stri
   return { buffer: Buffer.from(arrayBuffer), mimetype };
 }
 
+async function sendAudio(ctx: Parameters<Command['execute']>[0], audio: Buffer, mimetype = 'audio/mpeg'): Promise<void> {
+  await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+    audio,
+    mimetype,
+    ptt: false,
+  });
+}
+
+async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, platform?: MusicPlatform): Promise<void> {
+  const httpUrl = parseHttpUrl(input);
+  if (httpUrl && isDirectAudioUrl(httpUrl)) {
+    const audio = await fetchAudio(httpUrl.toString());
+    if (!audio) throw new Error('Direct audio fetch failed');
+    await sendAudio(ctx, audio.buffer, audio.mimetype);
+    return;
+  }
+
+  const source = httpUrl
+    ? (platform && normalizeUrl(input, platform)) || httpUrl.toString()
+    : platform?.searchInput(input) || platforms.youtube.searchInput(input);
+  const audio = await downloadYtDlpAudio(source);
+  await sendAudio(ctx, audio);
+}
+
 function createMusicCommand(platform: MusicPlatform): Command {
   return {
     name: platform.name,
     aliases: platform.aliases,
     category: CommandCategory.DOWNLOADER,
-    description: `Find or play music on ${platform.name}`,
+    description: `Play music from ${platform.name} as audio`,
     usage: `${platform.name} <song name|url>`,
     async execute(ctx) {
       const query = ctx.args.join(' ').trim();
@@ -102,27 +127,37 @@ function createMusicCommand(platform: MusicPlatform): Command {
         return;
       }
 
-      const httpUrl = parseHttpUrl(query);
-      if (httpUrl && isDirectAudioUrl(httpUrl)) {
-        const audio = await fetchAudio(httpUrl.toString());
-        if (!audio) {
-          await ctx.reply('Could not fetch that audio file. Use a direct audio URL under 20 MB.');
-          return;
-        }
-
-        await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
-          audio: audio.buffer,
-          mimetype: audio.mimetype,
-          ptt: true,
-        });
-        return;
+      try {
+        await ctx.reply(`Playing ${platform.name} audio...`);
+        await playMusic(ctx, query, platform);
+      } catch {
+        await ctx.reply(`Could not play audio from that ${platform.name} request.`);
       }
-
-      const url = (httpUrl && normalizeUrl(query, platform)) || platform.searchUrl(query);
-      await ctx.reply(`${platform.name}: ${url}`);
     },
   };
 }
+
+export const PlayCommand: Command = {
+  name: 'play',
+  aliases: [],
+  category: CommandCategory.DOWNLOADER,
+  description: 'Search and play the best matching music result as audio',
+  usage: 'play <song name|url>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .play <song name|url>');
+      return;
+    }
+
+    try {
+      await ctx.reply('Finding the best audio result...');
+      await playMusic(ctx, query);
+    } catch {
+      await ctx.reply('Could not play audio for that request.');
+    }
+  },
+};
 
 export const YouTubeCommand = createMusicCommand(platforms.youtube);
 export const SpotifyCommand = createMusicCommand(platforms.spotify);

@@ -21,6 +21,7 @@ import { SocialCommands } from './social';
 import { IslamicCommands } from './islamic';
 import { TikTokCommand, TikTokAudioCommand } from './tiktok';
 import {
+  PlayCommand,
   YouTubeCommand,
   SpotifyCommand,
   SoundCloudCommand,
@@ -51,6 +52,7 @@ import {
   useragent,
   shorturl,
   renamefile,
+  download,
   tts,
   textcase,
   wordcount,
@@ -159,6 +161,7 @@ export function loadCommands(): void {
   }
   commandRegistry.register(TikTokCommand);
   commandRegistry.register(TikTokAudioCommand);
+  commandRegistry.register(PlayCommand);
   commandRegistry.register(YouTubeCommand);
   commandRegistry.register(SpotifyCommand);
   commandRegistry.register(SoundCloudCommand);
@@ -187,6 +190,7 @@ export function loadCommands(): void {
   commandRegistry.register(useragent);
   commandRegistry.register(shorturl);
   commandRegistry.register(renamefile);
+  commandRegistry.register(download);
   commandRegistry.register(tts);
   commandRegistry.register(textcase);
   commandRegistry.register(wordcount);

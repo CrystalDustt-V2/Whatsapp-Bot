@@ -1,6 +1,6 @@
-import { Command, CommandCategory } from '../types';
-import { commandRegistry } from '../core/command-registry';
 import config from '../config';
+import { commandRegistry } from '../core/command-registry';
+import { Command, CommandCategory } from '../types';
 
 export const MenuCommand: Command = {
   name: 'menu',
@@ -50,7 +50,7 @@ export const MenuCommand: Command = {
       return;
     }
 
-    let text = `📱 WhatsApp Hybrid Bot\nChoose a sub-category to view its commands by typing "${config.BOT_PREFIX}menu <sub-category>"\n`;
+    let text = `*CrystalDust's WhatsApp Bot*\nChoose a sub-category to view its commands by typing "${config.BOT_PREFIX}menu <sub-category>"\n`;
 
     for (const category of categories) {
       if (commandRegistry.getByCategory(category).length > 0) {
@@ -58,7 +58,9 @@ export const MenuCommand: Command = {
       }
     }
 
-    text += `Total Commands: ${totalCommands}`;
+    text += `
+            Total Commands: *${totalCommands}*
+            (Donate to the owner to support and help to make this bot even better: ${config.DONATE_TEXT || "Donation hasn't configured yet"})`;
 
     await ctx.socket.sendMessage(
       ctx.message.key.remoteJid!,
