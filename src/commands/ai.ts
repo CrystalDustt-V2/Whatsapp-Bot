@@ -27,8 +27,9 @@ const IS_GEMINI = AI_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const AI_API_KEY = IS_GEMINI ? config.AI_API_KEY : config.AI_API_KEY || config.OPENROUTER_API_KEY;
 const AI_MODEL = config.AI_MODEL || (IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI ? '' : config.OPENROUTER_MODEL);
 const AI_IMAGE_API_BASE_URL = (config.AI_IMAGE_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
-const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || AI_API_KEY;
 const IS_IMAGE_POLLINATIONS = AI_IMAGE_API_BASE_URL.includes('pollinations.ai');
+const IS_IMAGE_GEMINI = AI_IMAGE_API_BASE_URL.includes('generativelanguage.googleapis.com');
+const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || (IS_IMAGE_GEMINI ? config.AI_API_KEY : AI_API_KEY);
 const AI_IMAGE_MODEL = config.AI_IMAGE_MODEL || (IS_IMAGE_POLLINATIONS ? 'sana' : config.OPENROUTER_IMAGE_MODEL);
 const AI_IMAGE_ENDPOINT = config.AI_IMAGE_ENDPOINT || (IS_IMAGE_POLLINATIONS ? '/prompt' : config.AI_API_BASE_URL ? '/images/generations' : '/images');
 const AI_TTS_API_BASE_URL = (config.AI_TTS_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
@@ -522,6 +523,28 @@ async function generateImage(ctx: BotContext, prompt: string, asSticker = false)
     const image = await fetchBinary(`https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?${params}`, 'image', AI_IMAGE_API_KEY);
     buffer = image.buffer;
     mimetype = image.contentType.startsWith('image/') ? image.contentType : mimetype;
+  } else if (IS_IMAGE_GEMINI) {
+    const response = await fetch(providerUrl(AI_IMAGE_API_BASE_URL, AI_IMAGE_ENDPOINT, 'generateContent', AI_IMAGE_MODEL), {
+      method: 'POST',
+      headers: headers(AI_IMAGE_API_BASE_URL, AI_IMAGE_API_KEY),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['Image'] },
+      }),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${snippet(text)}`);
+
+    const result = JSON.parse(text);
+    const parts = (result?.candidates || []).flatMap((candidate: any) => candidate?.content?.parts || []);
+    const inline = parts.map((part: any) => part?.inlineData || part?.inline_data).find((part: any) => part?.data);
+
+    if (inline?.data) {
+      buffer = Buffer.from(inline.data, 'base64');
+      mimetype = inline.mimeType || inline.mime_type || mimetype;
+    } else {
+      return 'Your AI provider did not return an image.';
+    }
   } else {
     const response = await fetch(`${AI_IMAGE_API_BASE_URL}${AI_IMAGE_ENDPOINT}`, {
       method: 'POST',
