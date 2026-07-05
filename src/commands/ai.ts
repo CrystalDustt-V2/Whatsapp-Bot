@@ -497,9 +497,9 @@ async function embedText(input: string): Promise<string> {
       body: JSON.stringify(
         IS_EMBEDDING_GEMINI
           ? {
-              model: `models/${geminiModelName(AI_EMBEDDING_MODEL)}`,
-              content: { parts: [{ text: input.slice(0, 8000) }] },
-            }
+            model: `models/${geminiModelName(AI_EMBEDDING_MODEL)}`,
+            content: { parts: [{ text: input.slice(0, 8000) }] },
+          }
           : { model: AI_EMBEDDING_MODEL, input: input.slice(0, 8000) }
       ),
     }
@@ -794,7 +794,7 @@ export const AiCommand: Command = {
   name: 'ai',
   aliases: ['ask'],
   category: CommandCategory.AI,
-  description: '[UNFINISHED, EXPERIMENTAL] Ask "CrystalDust V0" AI or let it use bot commands',
+  description: 'Ask "CrystalDust V0" AI or let it use bot commands',
   usage: 'ai <message>',
   async execute(ctx) {
     const input = ctx.args.join(' ').trim();
