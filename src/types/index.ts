@@ -1,8 +1,18 @@
 import type { WASocket, WAMessage } from '@whiskeysockets/baileys';
 
+export interface SenderIdentity {
+  jid: string;
+  phoneNumber: string;
+  profileName?: string;
+  displayName: string;
+  chatJid: string;
+  fromMe: boolean;
+}
+
 export interface BotContext {
   socket: WASocket;
   message: WAMessage;
+  sender: SenderIdentity;
   args: string[];
   rawArgs?: string;
   reply(text: string): Promise<void>;

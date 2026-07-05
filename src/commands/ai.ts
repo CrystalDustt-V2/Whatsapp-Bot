@@ -1,6 +1,7 @@
 import config from '../config';
 import { commandRegistry } from '../core/command-registry';
 import logger from '../core/logger';
+import { readAiMemoryContext } from '../services/message-memory';
 import { stickerEngine } from '../services/sticker-engine';
 import { BotContext, Command, CommandCategory } from '../types';
 
@@ -34,6 +35,10 @@ const AI_TTS_API_KEY = config.AI_TTS_API_KEY || AI_API_KEY;
 const IS_TTS_POLLINATIONS = AI_TTS_API_BASE_URL.includes('pollinations.ai');
 const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
 const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
+const AI_EMBEDDING_API_BASE_URL = (config.AI_EMBEDDING_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
+const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || AI_API_KEY;
+const AI_EMBEDDING_MODEL = config.AI_EMBEDDING_MODEL;
+const AI_EMBEDDING_ENDPOINT = config.AI_EMBEDDING_ENDPOINT || '/embeddings';
 const MAX_MEMORY_MESSAGES = 12;
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 const chatMemory = new Map<string, ChatMessage[]>();
@@ -205,6 +210,20 @@ async function chat(messages: ChatMessage[], withTools = true) {
           },
         },
       },
+      {
+        type: 'function',
+        function: {
+          name: 'embed_text',
+          description: 'Create an embedding vector for text. Use this only when the user asks for embeddings, vectors, or semantic similarity data.',
+          parameters: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'Text to embed.' },
+            },
+            required: ['text'],
+          },
+        },
+      },
     ];
     body.tool_choice = 'auto';
     body.parallel_tool_calls = false;
@@ -329,6 +348,51 @@ function promptFor(kind: 'image' | 'audio', input: string): string | null {
   }
 
   return null;
+}
+
+function embeddingInput(input: string): string | null {
+  const patterns = [
+    /^(?:embed|embedding|vectorize)\s*:?\s*([\s\S]+)$/i,
+    /^(?:create|generate|make)\s+(?:an?\s+)?(?:embedding|vector)\s+(?:for|of)\s+([\s\S]+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+
+  return null;
+}
+
+async function embedText(input: string): Promise<string> {
+  aiDebug({ textLength: input.length, embeddingModel: AI_EMBEDDING_MODEL, endpoint: AI_EMBEDDING_ENDPOINT }, 'embedding requested');
+
+  if (!AI_EMBEDDING_MODEL) {
+    return 'Set AI_EMBEDDING_MODEL first to use AI embeddings.';
+  }
+
+  const response = await fetch(`${AI_EMBEDDING_API_BASE_URL}${AI_EMBEDDING_ENDPOINT}`, {
+    method: 'POST',
+    headers: headers(AI_EMBEDDING_API_BASE_URL, AI_EMBEDDING_API_KEY),
+    body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input: input.slice(0, 8000) }),
+  });
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${snippet(text)}`);
+  }
+
+  const embedding = JSON.parse(text)?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) {
+    return 'Your AI embedding provider did not return an embedding.';
+  }
+
+  const preview = embedding
+    .slice(0, 8)
+    .map((value) => (typeof value === 'number' ? value.toFixed(4) : String(value)))
+    .join(', ');
+
+  return `Embedding created.\nModel: ${AI_EMBEDDING_MODEL}\nDimensions: ${embedding.length}\nPreview: [${preview}${embedding.length > 8 ? ', ...' : ''}]`;
 }
 
 async function generateImage(ctx: BotContext, prompt: string, asSticker = false): Promise<string> {
@@ -456,6 +520,17 @@ async function generateAudioFromTool(ctx: BotContext, toolCall: ToolCall): Promi
   }
 }
 
+async function embedTextFromTool(toolCall: ToolCall): Promise<string> {
+  try {
+    const args = JSON.parse(toolCall.function.arguments || '{}') as { text?: string };
+    const text = args.text?.trim();
+    if (!text) return 'Refused: text is required.';
+    return embedText(text);
+  } catch {
+    return 'Refused: invalid embedding arguments.';
+  }
+}
+
 async function runCommand(ctx: BotContext, commandName: string, commandArgs: string[]): Promise<string> {
   aiDebug({ commandName, args: commandArgs }, 'running bot command');
 
@@ -531,7 +606,9 @@ async function runTool(ctx: BotContext, toolCall: ToolCall): Promise<string> {
         ? generateImageFromTool(ctx, toolCall)
         : toolCall.function.name === 'generate_audio'
           ? generateAudioFromTool(ctx, toolCall)
-          : `Unknown tool: ${toolCall.function.name}`;
+          : toolCall.function.name === 'embed_text'
+            ? embedTextFromTool(toolCall)
+            : `Unknown tool: ${toolCall.function.name}`;
 }
 
 export const AiCommand: Command = {
@@ -548,6 +625,7 @@ export const AiCommand: Command = {
         chatModel: AI_MODEL,
         imageModel: AI_IMAGE_MODEL,
         ttsModel: AI_TTS_MODEL,
+        embeddingModel: AI_EMBEDDING_MODEL,
         baseUrl: AI_API_BASE_URL,
         toolsEnabled: config.AI_ENABLE_TOOLS,
       },
@@ -556,11 +634,6 @@ export const AiCommand: Command = {
 
     if (!input) {
       await replyText(ctx, 'Usage: .ai <message>');
-      return;
-    }
-
-    if (!AI_API_KEY && !IS_POLLINATIONS) {
-      await replyText(ctx, 'Set AI_API_KEY first to use .ai.');
       return;
     }
 
@@ -589,13 +662,29 @@ export const AiCommand: Command = {
         return;
       }
 
+      const textToEmbed = embeddingInput(input);
+      if (textToEmbed) {
+        aiDebug({ textLength: textToEmbed.length }, 'direct embedding shortcut');
+        await replyText(ctx, await embedText(textToEmbed));
+        return;
+      }
+
+      if (!AI_API_KEY && !IS_POLLINATIONS) {
+        await replyText(ctx, 'Set AI_API_KEY first to use AI chat.');
+        return;
+      }
+
+      const savedMemory = readAiMemoryContext(ctx.message.key.remoteJid || '');
       const messages: ChatMessage[] = [
         {
           role: 'system',
           content: `Your name is CrystalDust V0. You were made by your owner, CrystalDust, to live in WhatsApp and behave as a helpful assistant for all users. Answer briefly.
-You can generate text, create images, create voice audio, fetch public URLs, and run bot commands. Just like what a normal AI usually can do but you work on whatsapp and you've been given a bot commands capability.
-Use generate_image for image creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio for voice/speech/audio generation. Use run_bot_command when an existing command fits the user's request, especially for menu, stickers, media conversion, downloader, search, fun, group, or utility tasks. Use fetch_url when the user asks you to inspect or send a public URL. Never run ai.
+You can generate text, create images, create voice audio, create embeddings, fetch public URLs, and run bot commands. Just like what a normal AI usually can do but you work on whatsapp and you've been given a bot commands capability.
+Use generate_image for image creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio for voice/speech/audio generation. Use embed_text when the user asks for embeddings, vectors, or semantic similarity data. Use run_bot_command when an existing command fits the user's request, especially for menu, stickers, media conversion, downloader, search, fun, group, or utility tasks. Use fetch_url when the user asks you to inspect or send a public URL. Never run ai.
 If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} when a bot command should be used.
+Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.
+Use saved chat memory only as background context, and do not claim certainty when the memory is incomplete.
+${savedMemory ? `\nSaved chat memory:\n${savedMemory}\n` : ''}
 
 Available commands:
 ${commandList()}`,

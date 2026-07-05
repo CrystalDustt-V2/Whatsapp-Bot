@@ -3,6 +3,7 @@ import logger from './logger';
 import config from '../config';
 import { commandRegistry } from './command-registry';
 import type { BotContext } from '../types';
+import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -133,25 +134,6 @@ export class MessageHandler {
       }
 
       const timestamp = getTimestampSeconds(message);
-
-      if (Date.now() < this.ignoreUntilMs) {
-        markMessageSeen(messageKey);
-        logger.debug(
-          { messageId: message.key.id, remoteJid: message.key.remoteJid, ignoreUntilMs: this.ignoreUntilMs },
-          'Skipping message during startup backlog drain'
-        );
-        return;
-      }
-
-      if (timestamp > 0 && timestamp < this.ignoreBeforeSeconds) {
-        markMessageSeen(messageKey);
-        logger.debug(
-          { messageId: message.key.id, remoteJid: message.key.remoteJid, timestamp, ignoreBeforeSeconds: this.ignoreBeforeSeconds },
-          'Skipping old message from before this connection'
-        );
-        return;
-      }
-
       const msg = message.message;
       if (!msg) {
         logger.debug(
@@ -161,15 +143,42 @@ export class MessageHandler {
         return;
       }
 
+      const sender = getSenderIdentity(message, this.socket);
+      const messageType = Object.keys(msg)[0] || 'unknown';
       const text = this.getMessageText(msg).trim();
+      const logContext = {
+        fromMe: message.key.fromMe,
+        remoteJid: message.key.remoteJid,
+        messageId: message.key.id,
+        sender: sender.displayName,
+        senderNumber: sender.phoneNumber,
+      };
+
+      recordAiMemoryMessage(message, sender, text, messageType, timestamp);
+
+      if (Date.now() < this.ignoreUntilMs) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { ...logContext, ignoreUntilMs: this.ignoreUntilMs },
+          'Skipping message during startup backlog drain'
+        );
+        return;
+      }
+
+      if (timestamp > 0 && timestamp < this.ignoreBeforeSeconds) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { ...logContext, timestamp, ignoreBeforeSeconds: this.ignoreBeforeSeconds },
+          'Skipping old message from before this connection'
+        );
+        return;
+      }
 
       if (!text.startsWith(config.BOT_PREFIX)) {
         logger.debug(
           {
-            fromMe: message.key.fromMe,
-            remoteJid: message.key.remoteJid,
-            messageId: message.key.id,
-            messageType: Object.keys(msg)[0],
+            ...logContext,
+            messageType,
           },
           'Skipping non-command message'
         );
@@ -187,7 +196,7 @@ export class MessageHandler {
       const command = commandRegistry.get(commandName);
       if (!command) {
         logger.info(
-          { fromMe: message.key.fromMe, remoteJid: message.key.remoteJid, messageId: message.key.id },
+          logContext,
           `Unknown command: ${commandName}`
         );
         return;
@@ -196,13 +205,14 @@ export class MessageHandler {
       markMessageSeen(messageKey);
 
       logger.info(
-        { fromMe: message.key.fromMe, remoteJid: message.key.remoteJid, messageId: message.key.id },
+        logContext,
         `Executing command: ${commandName}`
       );
 
       const ctx: BotContext = {
         socket: this.socket,
         message,
+        sender,
         args,
         rawArgs,
         reply: (replyText) => this.reply(message, replyText),
@@ -210,7 +220,7 @@ export class MessageHandler {
 
       await command.execute(ctx);
       logger.info(
-        { fromMe: message.key.fromMe, remoteJid: message.key.remoteJid, messageId: message.key.id },
+        logContext,
         `Command completed: ${commandName}`
       );
     } catch (err) {

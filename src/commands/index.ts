@@ -52,6 +52,9 @@ import {
   shorturl,
   renamefile,
   tts,
+  textcase,
+  wordcount,
+  codesnippet,
   iplookup,
   dns,
   httpcheck,
@@ -185,6 +188,9 @@ export function loadCommands(): void {
   commandRegistry.register(shorturl);
   commandRegistry.register(renamefile);
   commandRegistry.register(tts);
+  commandRegistry.register(textcase);
+  commandRegistry.register(wordcount);
+  commandRegistry.register(codesnippet);
   commandRegistry.register(iplookup);
   commandRegistry.register(dns);
   commandRegistry.register(httpcheck);

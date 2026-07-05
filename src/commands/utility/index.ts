@@ -24,6 +24,11 @@ export { ShortUrlCommand as shorturl } from './shorturl';
 export { RenameFileCommand as renamefile } from './file';
 export { TextToSpeechCommand as tts } from './tts';
 export {
+  TextCaseCommand as textcase,
+  WordCountCommand as wordcount,
+  CodeSnippetCommand as codesnippet,
+} from './text-extra';
+export {
   IpLookupCommand as iplookup,
   DnsLookupCommand as dns,
   HttpCheckCommand as httpcheck,
