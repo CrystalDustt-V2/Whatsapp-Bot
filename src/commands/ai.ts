@@ -29,7 +29,8 @@ const AI_MODEL = config.AI_MODEL || (IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI
 const AI_IMAGE_API_BASE_URL = (config.AI_IMAGE_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
 const IS_IMAGE_POLLINATIONS = AI_IMAGE_API_BASE_URL.includes('pollinations.ai');
 const IS_IMAGE_GEMINI = AI_IMAGE_API_BASE_URL.includes('generativelanguage.googleapis.com');
-const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || (IS_IMAGE_GEMINI ? config.AI_API_KEY : AI_API_KEY);
+const IS_IMAGE_CLOUDFLARE = AI_IMAGE_API_BASE_URL.includes('api.cloudflare.com');
+const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || (IS_IMAGE_GEMINI ? config.AI_API_KEY : IS_IMAGE_CLOUDFLARE ? '' : AI_API_KEY);
 const AI_IMAGE_MODEL = config.AI_IMAGE_MODEL || (IS_IMAGE_POLLINATIONS ? 'sana' : config.OPENROUTER_IMAGE_MODEL);
 const AI_IMAGE_ENDPOINT = config.AI_IMAGE_ENDPOINT || (IS_IMAGE_POLLINATIONS ? '/prompt' : config.AI_API_BASE_URL ? '/images/generations' : '/images');
 const AI_TTS_API_BASE_URL = (config.AI_TTS_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
@@ -110,6 +111,21 @@ function providerUrl(baseUrl: string, path: string, method: string, model = AI_M
   }
 
   return `${baseUrl}${path}`;
+}
+
+function cloudflareImageUrl(): string {
+  const endpoint = AI_IMAGE_ENDPOINT || '';
+  const model = AI_IMAGE_MODEL || '';
+  let url = AI_IMAGE_API_BASE_URL;
+
+  if (endpoint.includes('/ai/run') || endpoint.includes('{MODEL}') || endpoint.includes('{AI_IMAGE_MODEL}')) {
+    url = `${url}${endpoint}`;
+  }
+
+  url = url.replace(/\{AI_IMAGE_MODEL\}|\{MODEL\}/g, model);
+  if (/\/ai\/run\/.+/.test(url)) return url;
+  if (url.endsWith('/ai/run')) return `${url}/${model}`;
+  return `${url}/ai/run/${model}`;
 }
 
 function apiUrl(path: string): string {
@@ -544,6 +560,34 @@ async function generateImage(ctx: BotContext, prompt: string, asSticker = false)
       mimetype = inline.mimeType || inline.mime_type || mimetype;
     } else {
       return 'Your AI provider did not return an image.';
+    }
+  } else if (IS_IMAGE_CLOUDFLARE) {
+    if (!AI_IMAGE_API_KEY) {
+      return 'Set AI_IMAGE_API_KEY first to use Cloudflare image generation.';
+    }
+
+    const response = await fetch(cloudflareImageUrl(), {
+      method: 'POST',
+      headers: headers(AI_IMAGE_API_BASE_URL, AI_IMAGE_API_KEY),
+      body: JSON.stringify({ prompt }),
+    });
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.toLowerCase() || 'application/octet-stream';
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status}: ${snippet(text)}`);
+    }
+
+    if (contentType.startsWith('image/')) {
+      buffer = Buffer.from(await response.arrayBuffer());
+      mimetype = contentType;
+    } else {
+      const text = await response.text();
+      const result = JSON.parse(text);
+      const image = result?.result?.image || result?.image || result?.result;
+      if (typeof image !== 'string') return 'Your AI provider did not return an image.';
+      buffer = Buffer.from(image.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      mimetype = result?.result?.mime_type || result?.mime_type || mimetype;
     }
   } else {
     const response = await fetch(`${AI_IMAGE_API_BASE_URL}${AI_IMAGE_ENDPOINT}`, {
