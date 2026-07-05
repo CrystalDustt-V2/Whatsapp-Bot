@@ -22,9 +22,10 @@ type ToolCall = {
 };
 
 const AI_API_BASE_URL = (config.AI_API_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
-const AI_API_KEY = config.AI_API_KEY || config.OPENROUTER_API_KEY;
 const IS_POLLINATIONS = AI_API_BASE_URL.includes('pollinations.ai');
-const AI_MODEL = config.AI_MODEL || (IS_POLLINATIONS ? 'openai-fast' : config.OPENROUTER_MODEL);
+const IS_GEMINI = AI_API_BASE_URL.includes('generativelanguage.googleapis.com');
+const AI_API_KEY = IS_GEMINI ? config.AI_API_KEY : config.AI_API_KEY || config.OPENROUTER_API_KEY;
+const AI_MODEL = config.AI_MODEL || (IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI ? '' : config.OPENROUTER_MODEL);
 const AI_IMAGE_API_BASE_URL = (config.AI_IMAGE_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
 const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || AI_API_KEY;
 const IS_IMAGE_POLLINATIONS = AI_IMAGE_API_BASE_URL.includes('pollinations.ai');
@@ -36,7 +37,8 @@ const IS_TTS_POLLINATIONS = AI_TTS_API_BASE_URL.includes('pollinations.ai');
 const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
 const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
 const AI_EMBEDDING_API_BASE_URL = (config.AI_EMBEDDING_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
-const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || AI_API_KEY;
+const IS_EMBEDDING_GEMINI = AI_EMBEDDING_API_BASE_URL.includes('generativelanguage.googleapis.com');
+const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || (IS_EMBEDDING_GEMINI ? config.AI_API_KEY : AI_API_KEY);
 const AI_EMBEDDING_MODEL = config.AI_EMBEDDING_MODEL;
 const AI_EMBEDDING_ENDPOINT = config.AI_EMBEDDING_ENDPOINT || '/embeddings';
 const MAX_MEMORY_MESSAGES = 12;
@@ -72,6 +74,11 @@ function aiFailureMessage(err: unknown): string {
 function headers(baseUrl = AI_API_BASE_URL, apiKey = AI_API_KEY): Record<string, string> {
   const result: Record<string, string> = { 'Content-Type': 'application/json' };
 
+  if (baseUrl.includes('generativelanguage.googleapis.com')) {
+    if (apiKey) result['x-goog-api-key'] = apiKey;
+    return result;
+  }
+
   if (apiKey) result.Authorization = `Bearer ${apiKey}`;
 
   if (baseUrl.includes('openrouter.ai')) {
@@ -82,12 +89,34 @@ function headers(baseUrl = AI_API_BASE_URL, apiKey = AI_API_KEY): Record<string,
   return result;
 }
 
+function geminiModelName(model: string): string {
+  return model.replace(/^models\//, '');
+}
+
+function providerUrl(baseUrl: string, path: string, method: string, model = AI_MODEL): string {
+  if (baseUrl.includes('{MODEL}') || baseUrl.includes('{aiMethod}')) {
+    return baseUrl
+      .replace(/\{MODEL\}/g, encodeURIComponent(geminiModelName(model)))
+      .replace(/\{aiMethod\}/g, method);
+  }
+
+  if (baseUrl.includes('generativelanguage.googleapis.com')) {
+    if (/\/models\/[^:]+:[a-zA-Z]+$/.test(baseUrl)) {
+      return baseUrl.replace(/\/models\/[^:]+:[a-zA-Z]+$/, `/models/${encodeURIComponent(geminiModelName(model))}:${method}`);
+    }
+    const root = baseUrl.replace(/\/models(?:\/[^/]*)?$/, '');
+    return `${root}/models/${encodeURIComponent(geminiModelName(model))}:${method}`;
+  }
+
+  return `${baseUrl}${path}`;
+}
+
 function apiUrl(path: string): string {
   if (IS_POLLINATIONS && path === '/chat/completions') {
     return AI_API_BASE_URL.includes('gen.pollinations.ai') ? `${AI_API_BASE_URL}${path}` : 'https://gen.pollinations.ai/v1/chat/completions';
   }
 
-  return `${AI_API_BASE_URL}${path}`;
+  return providerUrl(AI_API_BASE_URL, path, 'generateContent');
 }
 
 async function postJson(path: string, body: unknown): Promise<any> {
@@ -143,7 +172,77 @@ async function fetchBinary(url: string, label: string, apiKey = AI_API_KEY): Pro
   return { buffer, contentType };
 }
 
+function geminiContentText(message: ChatMessage): string {
+  const text = typeof message.content === 'string' ? message.content.trim() : '';
+  return text || (message.tool_calls?.length ? '[assistant requested a tool]' : '');
+}
+
+async function geminiChat(messages: ChatMessage[]) {
+  const startedAt = Date.now();
+  const systemText = messages
+    .filter((message) => message.role === 'system')
+    .map(geminiContentText)
+    .filter(Boolean)
+    .join('\n\n');
+  const contents = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: geminiContentText(message) }],
+    }))
+    .filter((content) => content.parts[0].text);
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: { maxOutputTokens: 800 },
+  };
+
+  if (systemText) {
+    body.systemInstruction = { parts: [{ text: systemText }] };
+  }
+
+  aiDebug({ baseUrl: AI_API_BASE_URL, model: AI_MODEL, contents: contents.length }, 'gemini request');
+  const response = await fetch(providerUrl(AI_API_BASE_URL, '/chat/completions', 'generateContent'), {
+    method: 'POST',
+    headers: headers(AI_API_BASE_URL, AI_API_KEY),
+    body: JSON.stringify(body),
+  });
+  const responseText = await response.text();
+
+  aiDebug(
+    {
+      status: response.status,
+      ok: response.ok,
+      ms: Date.now() - startedAt,
+      body: response.ok ? undefined : snippet(responseText),
+    },
+    'gemini response'
+  );
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${snippet(responseText)}`);
+  }
+
+  const result = JSON.parse(responseText);
+  const content = (result?.candidates?.[0]?.content?.parts || [])
+    .map((part: { text?: string }) => part.text || '')
+    .join('')
+    .trim();
+
+  return {
+    choices: [
+      {
+        finish_reason: result?.candidates?.[0]?.finishReason,
+        message: { content },
+      },
+    ],
+  };
+}
+
 async function chat(messages: ChatMessage[], withTools = true) {
+  if (IS_GEMINI) {
+    return geminiChat(messages);
+  }
+
   const body: Record<string, unknown> = {
     model: AI_MODEL,
     messages,
@@ -371,18 +470,31 @@ async function embedText(input: string): Promise<string> {
     return 'Set AI_EMBEDDING_MODEL first to use AI embeddings.';
   }
 
-  const response = await fetch(`${AI_EMBEDDING_API_BASE_URL}${AI_EMBEDDING_ENDPOINT}`, {
-    method: 'POST',
-    headers: headers(AI_EMBEDDING_API_BASE_URL, AI_EMBEDDING_API_KEY),
-    body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input: input.slice(0, 8000) }),
-  });
+  const response = await fetch(
+    IS_EMBEDDING_GEMINI
+      ? providerUrl(AI_EMBEDDING_API_BASE_URL, AI_EMBEDDING_ENDPOINT, 'embedContent', AI_EMBEDDING_MODEL)
+      : `${AI_EMBEDDING_API_BASE_URL}${AI_EMBEDDING_ENDPOINT}`,
+    {
+      method: 'POST',
+      headers: headers(AI_EMBEDDING_API_BASE_URL, AI_EMBEDDING_API_KEY),
+      body: JSON.stringify(
+        IS_EMBEDDING_GEMINI
+          ? {
+              model: `models/${geminiModelName(AI_EMBEDDING_MODEL)}`,
+              content: { parts: [{ text: input.slice(0, 8000) }] },
+            }
+          : { model: AI_EMBEDDING_MODEL, input: input.slice(0, 8000) }
+      ),
+    }
+  );
   const text = await response.text();
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${snippet(text)}`);
   }
 
-  const embedding = JSON.parse(text)?.data?.[0]?.embedding;
+  const result = JSON.parse(text);
+  const embedding = IS_EMBEDDING_GEMINI ? result?.embedding?.values : result?.data?.[0]?.embedding;
   if (!Array.isArray(embedding)) {
     return 'Your AI embedding provider did not return an embedding.';
   }
@@ -671,6 +783,11 @@ export const AiCommand: Command = {
 
       if (!AI_API_KEY && !IS_POLLINATIONS) {
         await replyText(ctx, 'Set AI_API_KEY first to use AI chat.');
+        return;
+      }
+
+      if (!AI_MODEL) {
+        await replyText(ctx, 'Set AI_MODEL first to use AI chat.');
         return;
       }
 
