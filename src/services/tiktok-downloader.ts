@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -23,6 +23,31 @@ export function isTikTokUrl(input: string): boolean {
   }
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ytDlpBinary(): Promise<string> {
+  const candidates = [
+    process.env.YT_DLP_PATH,
+    path.join(process.cwd(), '.local', 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'),
+    path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'),
+    '/home/container/.local/bin/yt-dlp',
+    '/home/container/bin/yt-dlp',
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+
+  return 'yt-dlp';
+}
+
 async function readDownloadedFile(dir: string, prefix: string, maxBytes: number, label: string): Promise<{ buffer: Buffer; name: string }> {
   const files = await readdir(dir);
   const file = files.find((name) => name.startsWith(prefix));
@@ -37,7 +62,7 @@ async function readDownloadedFile(dir: string, prefix: string, maxBytes: number,
 
 async function runYtDlp(args: string[]): Promise<void> {
   try {
-    await execFileAsync('yt-dlp', args, { maxBuffer: YTDLP_MAX_BUFFER });
+    await execFileAsync(await ytDlpBinary(), args, { maxBuffer: YTDLP_MAX_BUFFER });
   } catch (err) {
     const code = typeof err === 'object' && err && 'code' in err ? String(err.code) : '';
     if (code === 'ENOENT') throw new Error('yt-dlp is not installed on this server');
