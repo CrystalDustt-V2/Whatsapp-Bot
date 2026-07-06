@@ -1,5 +1,11 @@
 import { Command, CommandCategory } from '../types';
-import { downloadYtDlpAudioFile, DownloadedAudio, DownloadedMediaInfo } from '../services/tiktok-downloader';
+import {
+  downloadYtDlpAudioFile,
+  DownloadedAudio,
+  DownloadedMediaInfo,
+  searchYtDlp,
+  YtDlpSearchResult,
+} from '../services/tiktok-downloader';
 import logger from '../core/logger';
 
 type MusicPlatform = {
@@ -13,6 +19,7 @@ type MusicPlatform = {
 type MusicSource = {
   label: string;
   input: string;
+  query?: string;
 };
 
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
@@ -33,26 +40,26 @@ const platforms: Record<string, MusicPlatform> = {
     name: 'youtube-music',
     aliases: ['yt', 'youtube', 'ytmusic', 'ymusic'],
     hostPattern: /(^|\.)music\.youtube\.com$|(^|\.)youtube\.com$|(^|\.)youtu\.be$/,
-    searchInput: (query) => `ytsearch1:${query}`,
+    searchInput: (query) => `ytsearch5:${query}`,
   },
   spotify: {
     name: 'spotify',
     aliases: ['sp'],
     hostPattern: /(^|\.)spotify\.com$/,
-    searchInput: (query) => `ytsearch1:${query}`,
+    searchInput: (query) => `ytsearch5:${query}`,
     autoSearchInput: (query) => `https://open.spotify.com/search/${encodeURIComponent(query)}`,
   },
   soundcloud: {
     name: 'soundcloud',
     aliases: ['sc'],
     hostPattern: /(^|\.)soundcloud\.com$/,
-    searchInput: (query) => `scsearch1:${query}`,
+    searchInput: (query) => `scsearch5:${query}`,
   },
   newgrounds: {
     name: 'newgrounds',
     aliases: ['ng', 'ngaudio'],
     hostPattern: /(^|\.)newgrounds\.com$/,
-    searchInput: (query) => `ytsearch1:${query}`,
+    searchInput: (query) => `ytsearch5:${query}`,
     autoSearchInput: (query) => `https://www.newgrounds.com/search/conduct/audio?terms=${encodeURIComponent(query)}`,
   },
 };
@@ -121,10 +128,11 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
   const sources = httpUrl
     ? [{ label: platform?.name || httpUrl.hostname, input: (platform && normalizeUrl(input, platform)) || httpUrl.toString() }]
     : platform
-      ? [{ label: platform.name, input: platform.searchInput(input) }]
+      ? [{ label: platform.name, input: platform.searchInput(input), query: input }]
       : autoMusicPlatformOrder.map((item) => ({
           label: item.name,
           input: (item.autoSearchInput || item.searchInput)(input),
+          query: input,
         }));
   const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
@@ -140,7 +148,8 @@ async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAud
   for (let i = 0; i < uniqueSources.length; i += 1) {
     const source = uniqueSources[i];
     try {
-      return { ...(await downloadYtDlpAudioFile(source.input)), platformName: source.label };
+      const input = await bestDownloadInput(source);
+      return { ...(await downloadYtDlpAudioFile(input)), platformName: source.label };
     } catch (err) {
       const log = i === uniqueSources.length - 1 ? logger.warn.bind(logger) : logger.info.bind(logger);
       log({ platform: source.label, source: safeSource(source.input), error: errorSummary(err) }, 'Music audio source failed');
@@ -148,6 +157,45 @@ async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAud
     }
   }
   throw lastError;
+}
+
+async function bestDownloadInput(source: MusicSource): Promise<string> {
+  if (!source.query || !/^(yt|sc)search\d*:/i.test(source.input)) return source.input;
+
+  const results = await searchYtDlp(source.input, 5);
+  const best = results
+    .map((result) => ({ result, score: relevanceScore(source.query!, result) }))
+    .sort((a, b) => b.score - a.score)[0]?.result;
+  const url = best?.webpageUrl || best?.url;
+
+  return url && /^https?:\/\//i.test(url) ? url : source.input;
+}
+
+function relevanceScore(query: string, result: YtDlpSearchResult): number {
+  const queryText = normalizeSearchText(query);
+  const title = normalizeSearchText(result.title || '');
+  const uploader = normalizeSearchText(result.uploader || '');
+  const tokens = [...new Set(queryText.split(' ').filter((token) => token.length > 1))];
+  let score = title.includes(queryText) ? 20 : 0;
+
+  for (const token of tokens) {
+    if (title.includes(token)) score += 4;
+    else if (uploader.includes(token)) score += 1;
+  }
+
+  if (!tokens.includes('cover') && title.includes('cover')) score -= 3;
+  if (!tokens.includes('remix') && title.includes('remix')) score -= 2;
+  if (!tokens.includes('instrumental') && title.includes('instrumental')) score -= 3;
+  if (!tokens.includes('karaoke') && title.includes('karaoke')) score -= 3;
+
+  return score;
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 function safeSource(source: string): string {

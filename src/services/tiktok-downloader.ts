@@ -24,6 +24,11 @@ export type DownloadedMediaInfo = {
   extractor?: string;
 };
 
+export type YtDlpSearchResult = DownloadedMediaInfo & {
+  id?: string;
+  url?: string;
+};
+
 export function isTikTokUrl(input: string): boolean {
   try {
     const host = new URL(input).hostname.toLowerCase();
@@ -148,6 +153,42 @@ function parseYtDlpInfo(stdout: string): DownloadedMediaInfo {
   }
 
   return info;
+}
+
+function parseJsonLines(stdout: string): YtDlpSearchResult[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => ({
+      id: typeof item.id === 'string' ? item.id : undefined,
+      title: typeof item.title === 'string' ? item.title : undefined,
+      uploader: typeof item.uploader === 'string' ? item.uploader : undefined,
+      duration: typeof item.duration_string === 'string' ? item.duration_string : undefined,
+      webpageUrl: typeof item.webpage_url === 'string' ? item.webpage_url : undefined,
+      extractor: typeof item.extractor_key === 'string' ? item.extractor_key : undefined,
+      url: typeof item.url === 'string' ? item.url : undefined,
+    }));
+}
+
+export async function searchYtDlp(input: string, limit = 5): Promise<YtDlpSearchResult[]> {
+  const stdout = await runYtDlp([
+    '--dump-json',
+    '--flat-playlist',
+    '--playlist-end',
+    String(limit),
+    input,
+  ]);
+
+  return parseJsonLines(stdout);
 }
 
 function audioMimeType(fileName: string): string {
