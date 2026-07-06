@@ -117,11 +117,15 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
 
 async function downloadFirstAudio(sources: string[]): Promise<DownloadedAudio> {
   let lastError: unknown;
-  for (const source of [...new Set(sources)]) {
+  const uniqueSources = [...new Set(sources)];
+
+  for (let i = 0; i < uniqueSources.length; i += 1) {
+    const source = uniqueSources[i];
     try {
       return await downloadYtDlpAudioFile(source);
     } catch (err) {
-      logger.warn({ source: safeSource(source), err }, 'Music audio source failed');
+      const log = i === uniqueSources.length - 1 ? logger.warn.bind(logger) : logger.info.bind(logger);
+      log({ source: safeSource(source), error: errorSummary(err) }, 'Music audio source failed');
       lastError = err;
     }
   }
@@ -137,6 +141,10 @@ function safeSource(source: string): string {
   } catch {
     return source;
   }
+}
+
+function errorSummary(err: unknown): string {
+  return err instanceof Error ? err.message.split('\n')[0] : String(err);
 }
 
 function playFailure(err: unknown): string {
