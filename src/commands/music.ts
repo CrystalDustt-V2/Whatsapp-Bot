@@ -1,5 +1,5 @@
 import { Command, CommandCategory } from '../types';
-import { downloadYtDlpAudioFile, DownloadedAudio } from '../services/tiktok-downloader';
+import { downloadYtDlpAudioFile, DownloadedAudio, DownloadedMediaInfo } from '../services/tiktok-downloader';
 import logger from '../core/logger';
 
 type MusicPlatform = {
@@ -104,6 +104,7 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
     const audio = await fetchAudio(httpUrl.toString());
     if (!audio) throw new Error('Direct audio fetch failed');
     await sendAudio(ctx, audio.buffer, audio.mimetype);
+    await sendMusicInfo(ctx, { webpageUrl: httpUrl.toString(), extractor: 'Direct audio' }, platform);
     return;
   }
 
@@ -113,6 +114,7 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
   const fallback = httpUrl || platform?.name === platforms.soundcloud.name ? [] : [platforms.soundcloud.searchInput(input)];
   const audio = await downloadFirstAudio([source, ...fallback]);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
+  await sendMusicInfo(ctx, audio.info, platform);
 }
 
 async function downloadFirstAudio(sources: string[]): Promise<DownloadedAudio> {
@@ -145,6 +147,30 @@ function safeSource(source: string): string {
 
 function errorSummary(err: unknown): string {
   return err instanceof Error ? err.message.split('\n')[0] : String(err);
+}
+
+async function sendMusicInfo(
+  ctx: Parameters<Command['execute']>[0],
+  info?: DownloadedMediaInfo,
+  requestedPlatform?: MusicPlatform
+): Promise<void> {
+  if (!info) return;
+
+  const lines = [
+    'Music info',
+    info.title ? `Title: ${info.title}` : undefined,
+    info.uploader ? `Artist/Channel: ${info.uploader}` : undefined,
+    `Platform: ${requestedPlatform?.name || prettyPlatform(info.extractor)}`,
+    info.duration ? `Duration: ${info.duration}` : undefined,
+    info.webpageUrl ? `Source: ${info.webpageUrl}` : undefined,
+  ].filter(Boolean);
+
+  await ctx.reply(lines.join('\n'));
+}
+
+function prettyPlatform(value?: string): string {
+  if (!value) return 'Unknown';
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
 }
 
 function playFailure(err: unknown): string {

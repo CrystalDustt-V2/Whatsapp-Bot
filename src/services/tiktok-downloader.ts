@@ -13,6 +13,15 @@ const YTDLP_MAX_BUFFER = 4 * 1024 * 1024;
 export type DownloadedAudio = {
   buffer: Buffer;
   mimetype: string;
+  info?: DownloadedMediaInfo;
+};
+
+export type DownloadedMediaInfo = {
+  title?: string;
+  uploader?: string;
+  duration?: string;
+  webpageUrl?: string;
+  extractor?: string;
 };
 
 export function isTikTokUrl(input: string): boolean {
@@ -74,9 +83,10 @@ async function readDownloadedFile(dir: string, prefix: string, maxBytes: number,
   return { buffer: await readFile(filePath), name: file };
 }
 
-async function runYtDlp(args: string[]): Promise<void> {
+async function runYtDlp(args: string[]): Promise<string> {
   try {
-    await execFileAsync(await ytDlpBinary(), args, { maxBuffer: YTDLP_MAX_BUFFER });
+    const { stdout } = await execFileAsync(await ytDlpBinary(), args, { maxBuffer: YTDLP_MAX_BUFFER });
+    return stdout;
   } catch (err) {
     const code = typeof err === 'object' && err && 'code' in err ? String(err.code) : '';
     const stderr = tail(typeof err === 'object' && err && 'stderr' in err ? err.stderr : '');
@@ -96,6 +106,28 @@ async function runYtDlp(args: string[]): Promise<void> {
     );
     throw err;
   }
+}
+
+function parseYtDlpInfo(stdout: string): DownloadedMediaInfo {
+  const labels = {
+    title: '__BOT_INFO_TITLE__',
+    uploader: '__BOT_INFO_UPLOADER__',
+    duration: '__BOT_INFO_DURATION__',
+    webpageUrl: '__BOT_INFO_URL__',
+    extractor: '__BOT_INFO_EXTRACTOR__',
+  } as const;
+  const info: DownloadedMediaInfo = {};
+
+  for (const [key, label] of Object.entries(labels) as [keyof DownloadedMediaInfo, string][]) {
+    const value = stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith(label))
+      ?.slice(label.length)
+      .trim();
+    if (value && value !== 'NA') info[key] = value;
+  }
+
+  return info;
 }
 
 function audioMimeType(fileName: string): string {
@@ -136,19 +168,29 @@ export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAud
   const output = path.join(dir, 'audio.%(ext)s');
 
   try {
-    await runYtDlp([
+    const stdout = await runYtDlp([
       '--no-playlist',
       '--max-filesize',
       `${MAX_AUDIO_BYTES}`,
       '-f',
       'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+      '--print',
+      'after_move:__BOT_INFO_TITLE__%(title)s',
+      '--print',
+      'after_move:__BOT_INFO_UPLOADER__%(uploader)s',
+      '--print',
+      'after_move:__BOT_INFO_DURATION__%(duration_string)s',
+      '--print',
+      'after_move:__BOT_INFO_URL__%(webpage_url)s',
+      '--print',
+      'after_move:__BOT_INFO_EXTRACTOR__%(extractor_key)s',
       '-o',
       output,
       url,
     ]);
 
     const file = await readDownloadedFile(dir, 'audio.', MAX_AUDIO_BYTES, 'Audio');
-    return { buffer: file.buffer, mimetype: audioMimeType(file.name) };
+    return { buffer: file.buffer, mimetype: audioMimeType(file.name), info: parseYtDlpInfo(stdout) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
