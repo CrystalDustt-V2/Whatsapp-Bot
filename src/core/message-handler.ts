@@ -1,9 +1,14 @@
-import type { WASocket, WAMessage, proto } from '@whiskeysockets/baileys';
+import type { WASocket, WAMessage, WAMessageUpdate, proto } from '@whiskeysockets/baileys';
 import logger from './logger';
 import config from '../config';
 import { commandRegistry } from './command-registry';
 import type { BotContext } from '../types';
 import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
+import {
+  recordDeletedMessageFromProtocol,
+  recordDeletedMessageFromUpdate,
+  recordRecoverableMessage,
+} from '../services/deleted-message-recovery';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -174,6 +179,18 @@ export class MessageHandler {
         return;
       }
 
+      const recovered = recordDeletedMessageFromProtocol(message, sender, timestamp);
+      if (recovered) {
+        markMessageSeen(messageKey);
+        logger.info(
+          { ...logContext, recoveredMessageId: recovered.messageId, recoveredSender: recovered.senderName },
+          'Recovered deleted message metadata'
+        );
+        return;
+      }
+
+      recordRecoverableMessage(message, sender, text, timestamp);
+
       if (!text.startsWith(config.BOT_PREFIX)) {
         logger.debug(
           {
@@ -225,6 +242,28 @@ export class MessageHandler {
       );
     } catch (err) {
       logger.error({ err }, 'Error handling message');
+    }
+  }
+
+  async handleMessageUpdate(update: WAMessageUpdate): Promise<void> {
+    try {
+      const key = update.update.key || update.key;
+      const timestampSeconds = Math.floor(Date.now() / 1000);
+      const deletedBy = getSenderIdentity({ key, messageTimestamp: timestampSeconds } as WAMessage, this.socket);
+      const recovered = recordDeletedMessageFromUpdate(update, deletedBy, timestampSeconds);
+      if (!recovered) return;
+
+      logger.info(
+        {
+          remoteJid: recovered.chatJid,
+          messageId: recovered.messageId,
+          sender: recovered.senderName,
+          deletedBy: recovered.deletedByName,
+        },
+        'Recovered deleted message metadata'
+      );
+    } catch (err) {
+      logger.warn({ err }, 'Could not process deleted message update');
     }
   }
 }

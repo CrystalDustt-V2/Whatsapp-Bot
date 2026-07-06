@@ -1,0 +1,63 @@
+import config from '../../config';
+import { listDeletedMessages, type DeletedMessageRecord } from '../../services/deleted-message-recovery';
+import { Command, CommandCategory } from '../../types';
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US', { hour12: false });
+}
+
+function preview(value: string, max = 80): string {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+function formatRecord(record: DeletedMessageRecord, index: number): string {
+  return (
+    `*Deleted message #${index}*\n` +
+    `From: ${record.senderName}${record.senderNumber ? ` (${record.senderNumber})` : ''}\n` +
+    `Deleted by: ${record.deletedByName}${record.deletedByNumber ? ` (${record.deletedByNumber})` : ''}\n` +
+    `Type: ${record.messageType}\n` +
+    `Sent: ${formatTime(record.timestamp)}\n` +
+    `Deleted: ${formatTime(record.deletedAt)}\n\n` +
+    `${record.text}`
+  );
+}
+
+function formatList(records: DeletedMessageRecord[]): string {
+  const lines = records.map((record, index) => {
+    return `${index + 1}. ${record.senderName} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
+  });
+
+  return `*Recovered deleted messages*\n${lines.join('\n')}\n\nUse ${config.BOT_PREFIX}deleted <number> to view one.`;
+}
+
+export const DeletedMessageCommand: Command = {
+  name: 'deleted',
+  aliases: ['antidelete', 'undelete', 'revoke'],
+  category: CommandCategory.UTILITY,
+  description: 'Recover recently deleted messages from this chat',
+  usage: 'deleted [list|number]',
+  async execute(ctx) {
+    const chatJid = ctx.message.key.remoteJid || ctx.sender.chatJid;
+    const records = listDeletedMessages(chatJid, 10);
+    if (!records.length) {
+      await ctx.reply('No deleted messages saved for this chat yet. I can only recover messages I saw while I was running.');
+      return;
+    }
+
+    const mode = (ctx.args[0] || '').toLowerCase();
+    if (mode === 'list' || mode === 'recent') {
+      await ctx.reply(formatList(records));
+      return;
+    }
+
+    const index = mode ? Number(mode) : 1;
+    if (!Number.isInteger(index) || index < 1 || index > records.length) {
+      await ctx.reply(`Pick a number from 1 to ${records.length}, or use ${config.BOT_PREFIX}deleted list.`);
+      return;
+    }
+
+    await ctx.reply(formatRecord(records[index - 1], index));
+  },
+};

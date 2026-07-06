@@ -363,6 +363,21 @@ function textFrom(message: any): string {
   return typeof message?.content === 'string' ? message.content.trim() : '';
 }
 
+function isMalformedFunctionCall(response: any): boolean {
+  return response?.choices?.[0]?.finish_reason === 'MALFORMED_FUNCTION_CALL';
+}
+
+function noNativeToolRetry(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message, index) =>
+    index === 0 && message.role === 'system'
+      ? {
+          ...message,
+          content: `${message.content || ''}\n\nRetry rule: do not emit native provider function calls. If a bot command should run, reply only as RUN_COMMAND {"command":"name","args":["arg1"]}. Otherwise answer in plain text.`,
+        }
+      : message
+  );
+}
+
 async function replyText(ctx: BotContext, text: string): Promise<void> {
   await ctx.socket.sendMessage(
     ctx.message.key.remoteJid!,
@@ -866,6 +881,7 @@ export const AiCommand: Command = {
 You can generate text, create images, create voice audio, create embeddings, fetch public URLs, and run bot commands. Just like what a normal AI usually can do but you work on whatsapp and you've been given a bot commands capability.
 Use generate_image for image creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio for voice/speech/audio generation. Use embed_text when the user asks for embeddings, vectors, or semantic similarity data. Use run_bot_command when an existing command fits the user's request, especially for menu, stickers, media conversion, downloader, search, fun, group, or utility tasks. Use fetch_url when the user asks you to inspect or send a public URL. Never run ai.
 If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} when a bot command should be used.
+${IS_GEMINI ? 'Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}
 Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.
 Use saved chat memory only as background context, and do not claim certainty when the memory is incomplete.
 ${savedMemory ? `\nSaved chat memory:\n${savedMemory}\n` : ''}
@@ -877,14 +893,26 @@ ${commandList()}`,
         { role: 'user', content: input },
       ];
 
-      const first = await chat(messages);
-      const assistant = first?.choices?.[0]?.message;
-      const toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
-      const assistantText = textFrom(assistant);
+      let first = await chat(messages);
+      let assistant = first?.choices?.[0]?.message;
+      let toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
+      let assistantText = textFrom(assistant);
       aiDebug(
         { finishReason: first?.choices?.[0]?.finish_reason, toolCalls: toolCalls?.map((tool) => tool.function.name), text: snippet(assistantText, 500) },
         'chat response parsed'
       );
+
+      if (!assistantText && !toolCalls?.length && isMalformedFunctionCall(first)) {
+        aiDebug({ finishReason: first?.choices?.[0]?.finish_reason }, 'retrying malformed function call as text directive');
+        first = await chat(noNativeToolRetry(messages), false);
+        assistant = first?.choices?.[0]?.message;
+        toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
+        assistantText = textFrom(assistant);
+        aiDebug(
+          { finishReason: first?.choices?.[0]?.finish_reason, toolCalls: toolCalls?.map((tool) => tool.function.name), text: snippet(assistantText, 500) },
+          'retry chat response parsed'
+        );
+      }
 
       if (toolCalls?.length) {
         messages.push({ role: 'assistant', content: assistant.content ?? null, tool_calls: toolCalls });

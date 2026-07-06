@@ -21,6 +21,7 @@ import { SocialCommands } from './social';
 import { IslamicCommands } from './islamic';
 import { EconomyCommands } from './economy';
 import { MarketplaceCommands } from './marketplace';
+import { AnonymousCommands } from './anonymous';
 import { TikTokCommand, TikTokAudioCommand } from './tiktok';
 import {
   PlayCommand,
@@ -37,6 +38,7 @@ import {
   urlencode,
   urldecode,
   password,
+  deleted,
   qr,
   upside,
   nickname,
@@ -171,6 +173,9 @@ export function loadCommands(): void {
   for (const command of MarketplaceCommands) {
     commandRegistry.register(command);
   }
+  for (const command of AnonymousCommands) {
+    commandRegistry.register(command);
+  }
   commandRegistry.register(TikTokCommand);
   commandRegistry.register(TikTokAudioCommand);
   commandRegistry.register(PlayCommand);
@@ -185,6 +190,7 @@ export function loadCommands(): void {
   commandRegistry.register(urlencode);
   commandRegistry.register(urldecode);
   commandRegistry.register(password);
+  commandRegistry.register(deleted);
   commandRegistry.register(qr);
   commandRegistry.register(upside);
   commandRegistry.register(nickname);

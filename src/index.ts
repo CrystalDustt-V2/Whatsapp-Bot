@@ -80,6 +80,12 @@ async function main() {
           await messageHandler.handleMessage(msg);
         }
       });
+
+      socket.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+          await messageHandler.handleMessageUpdate(update);
+        }
+      });
     },
     async onDisconnected() {
       apiServer.clearBotSocket();
