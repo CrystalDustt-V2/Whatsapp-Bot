@@ -1,5 +1,5 @@
 import { Command, CommandCategory } from '../types';
-import { downloadYtDlpAudio } from '../services/tiktok-downloader';
+import { downloadYtDlpAudioFile, DownloadedAudio } from '../services/tiktok-downloader';
 
 type MusicPlatform = {
   name: string;
@@ -109,8 +109,28 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
   const source = httpUrl
     ? (platform && normalizeUrl(input, platform)) || httpUrl.toString()
     : platform?.searchInput(input) || platforms.youtube.searchInput(input);
-  const audio = await downloadYtDlpAudio(source);
-  await sendAudio(ctx, audio);
+  const fallback = httpUrl || platform?.name === platforms.soundcloud.name ? [] : [platforms.soundcloud.searchInput(input)];
+  const audio = await downloadFirstAudio([source, ...fallback]);
+  await sendAudio(ctx, audio.buffer, audio.mimetype);
+}
+
+async function downloadFirstAudio(sources: string[]): Promise<DownloadedAudio> {
+  let lastError: unknown;
+  for (const source of [...new Set(sources)]) {
+    try {
+      return await downloadYtDlpAudioFile(source);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+function playFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : '';
+  if (message.includes('yt-dlp is not installed')) return 'yt-dlp is not installed on this server.';
+  if (message.includes('too large')) return 'The audio file is over 20 MB.';
+  return 'The source did not provide downloadable audio.';
 }
 
 function createMusicCommand(platform: MusicPlatform): Command {
@@ -130,8 +150,8 @@ function createMusicCommand(platform: MusicPlatform): Command {
       try {
         await ctx.reply(`Playing ${platform.name} audio...`);
         await playMusic(ctx, query, platform);
-      } catch {
-        await ctx.reply(`Could not play audio from that ${platform.name} request.`);
+      } catch (err) {
+        await ctx.reply(`Could not play audio from that ${platform.name} request. ${playFailure(err)}`);
       }
     },
   };
@@ -153,8 +173,8 @@ export const PlayCommand: Command = {
     try {
       await ctx.reply('Finding the best audio result...');
       await playMusic(ctx, query);
-    } catch {
-      await ctx.reply('Could not play audio for that request.');
+    } catch (err) {
+      await ctx.reply(`Could not play audio for that request. ${playFailure(err)}`);
     }
   },
 };

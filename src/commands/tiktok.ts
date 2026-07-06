@@ -1,5 +1,5 @@
 import {
-  downloadTikTokAudio,
+  downloadTikTokAudioFile,
   downloadTikTokVideo,
   isTikTokUrl,
 } from '../services/tiktok-downloader';
@@ -21,10 +21,10 @@ function getFormat(value: string | undefined): TikTokFormat | null {
 async function sendTikTok(ctx: Parameters<Command['execute']>[0], url: string, format: TikTokFormat): Promise<void> {
   if (format === 'audio') {
     await ctx.reply('Exporting TikTok audio...');
-    const audio = await downloadTikTokAudio(url);
+    const audio = await downloadTikTokAudioFile(url);
     await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
-      audio,
-      mimetype: 'audio/mpeg',
+      audio: audio.buffer,
+      mimetype: audio.mimetype,
     });
     return;
   }
@@ -64,7 +64,7 @@ export const TikTokAudioCommand: Command = {
   name: 'tiktokaudio',
   aliases: ['ttaudio', 'ttmp3'],
   category: CommandCategory.DOWNLOADER,
-  description: 'Download a TikTok video and export it as MP3',
+  description: 'Download a TikTok video as audio',
   usage: 'tiktokaudio <url>',
   async execute(ctx) {
     const url = getUrl(ctx.args);

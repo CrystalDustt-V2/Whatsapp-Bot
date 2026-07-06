@@ -23,7 +23,7 @@ export const BotCommand: Command = {
       `Good places to start:\n` +
       `- *${prefix}menu* - shows the command categories. Try ${prefix}menu sticker or ${prefix}menu media when you want a specific section.\n` +
       `- *${prefix}search <query>* - finds related commands by name and description, so you do not have to memorize everything.\n` +
-      `- *${prefix}ai* <message>* - asks CrystalDust V0 directly. It can answer normally, and it can use bot commands when that fits.\n\n` +
+      `- *${prefix}ai <message>* - asks CrystalDust V0 directly. It can answer normally, and it can use bot commands when that fits.\n\n` +
       `Commands start with "${prefix}"`
     );
   },

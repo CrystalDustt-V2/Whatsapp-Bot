@@ -58,9 +58,7 @@ export const MenuCommand: Command = {
       }
     }
 
-    text += `
-            Total Commands: *${totalCommands}*
-            (Donate to the owner to support and help to make this bot even better: ${config.DONATE_TEXT || "Donation hasn't configured yet"})`;
+    text += `Total Commands: *${totalCommands}*\n(Donate to the owner to support and help to make this bot even better: ${config.DONATE_TEXT || "Donation hasn't configured yet"})`;
 
     await ctx.socket.sendMessage(
       ctx.message.key.remoteJid!,
