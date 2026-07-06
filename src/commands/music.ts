@@ -114,7 +114,7 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
     const audio = await fetchAudio(httpUrl.toString());
     if (!audio) throw new Error('Direct audio fetch failed');
     await sendAudio(ctx, audio.buffer, audio.mimetype);
-    await sendMusicInfo(ctx, { webpageUrl: httpUrl.toString(), extractor: 'Direct audio' }, platform?.name);
+    await sendMusicInfo(ctx, { webpageUrl: httpUrl.toString(), extractor: 'Direct audio' }, platform?.name, input);
     return;
   }
 
@@ -128,7 +128,7 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
         }));
   const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
-  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name);
+  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input);
 }
 
 async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAudio & { platformName?: string }> {
@@ -168,20 +168,22 @@ function errorSummary(err: unknown): string {
 async function sendMusicInfo(
   ctx: Parameters<Command['execute']>[0],
   info?: DownloadedMediaInfo,
-  platformName?: string
+  platformName?: string,
+  requested?: string
 ): Promise<void> {
   if (!info) return;
 
   const lines = [
     'Music info',
-    info.title ? `Title: ${info.title}` : undefined,
-    info.uploader ? `Artist/Channel: ${info.uploader}` : undefined,
-    `Platform: ${platformName || prettyPlatform(info.extractor)}`,
+    requested && !parseHttpUrl(requested) ? `Requested: ${requested}` : undefined,
+    info.title ? `Result title: ${info.title}` : undefined,
+    info.uploader ? `Uploader: ${info.uploader}` : undefined,
+    `Source platform: ${platformName || prettyPlatform(info.extractor)}`,
     info.duration ? `Duration: ${info.duration}` : undefined,
     info.webpageUrl ? `Source: ${info.webpageUrl}` : undefined,
   ].filter(Boolean);
 
-  await ctx.reply(lines.join('\n'));
+  await ctx.socket.sendMessage(ctx.message.key.remoteJid!, { text: lines.join('\n'), linkPreview: null });
 }
 
 function prettyPlatform(value?: string): string {
@@ -194,6 +196,10 @@ function playFailure(err: unknown): string {
   if (message.includes('yt-dlp is not installed')) return 'yt-dlp is not installed on this server.';
   if (message.includes('yt-dlp is not executable')) return 'yt-dlp exists but is not executable. Run chmod 755 on it.';
   if (message.includes('yt-dlp binary cannot run')) return 'yt-dlp binary cannot run on this server. Upload the Linux binary.';
+  if (message.includes('cookies file was not found')) return 'Configured yt-dlp cookies file was not found.';
+  if (message.includes('cookies file is invalid')) return 'yt-dlp cookies file is invalid. Export it in Netscape cookies.txt format.';
+  if (message.includes('YouTube requires cookies')) return 'YouTube blocked this server. Upload cookies.txt and configure yt-dlp cookies.';
+  if (message.includes('DRM')) return 'That source uses DRM and cannot be downloaded.';
   if (message.includes('too large')) return 'The audio file is over 20 MB.';
   return 'The source did not provide downloadable audio.';
 }
