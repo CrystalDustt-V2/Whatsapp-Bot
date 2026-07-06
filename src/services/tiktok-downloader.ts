@@ -79,14 +79,18 @@ async function runYtDlp(args: string[]): Promise<void> {
     await execFileAsync(await ytDlpBinary(), args, { maxBuffer: YTDLP_MAX_BUFFER });
   } catch (err) {
     const code = typeof err === 'object' && err && 'code' in err ? String(err.code) : '';
+    const stderr = tail(typeof err === 'object' && err && 'stderr' in err ? err.stderr : '');
+    const stdout = tail(typeof err === 'object' && err && 'stdout' in err ? err.stdout : '');
     if (code === 'ENOENT') throw new Error('yt-dlp is not installed on this server');
     if (code === 'EACCES') throw new Error('yt-dlp is not executable on this server');
-    if (code === 'ENOEXEC') throw new Error('yt-dlp binary cannot run on this server');
+    if (code === 'ENOEXEC' || /syntax error|exec format|cannot execute binary/i.test(`${stderr}\n${stdout}`)) {
+      throw new Error('yt-dlp binary cannot run on this server');
+    }
     logger.warn(
       {
         code,
-        stderr: tail(typeof err === 'object' && err && 'stderr' in err ? err.stderr : ''),
-        stdout: tail(typeof err === 'object' && err && 'stdout' in err ? err.stdout : ''),
+        stderr,
+        stdout,
       },
       'yt-dlp command failed',
     );
