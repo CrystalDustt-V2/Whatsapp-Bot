@@ -7,6 +7,7 @@ import {
   YtDlpSearchResult,
 } from '../services/tiktok-downloader';
 import logger from '../core/logger';
+import config from '../config';
 
 type MusicPlatform = {
   name: string;
@@ -20,6 +21,23 @@ type MusicSource = {
   label: string;
   input: string;
   query?: string;
+  match?: SpotifyTrackMatch;
+  audioSourceLabel?: string;
+};
+
+type SpotifyTrackMatch = {
+  title: string;
+  artists: string;
+  album?: string;
+  durationMs?: number;
+  url: string;
+  query: string;
+};
+
+type DownloadedMusic = DownloadedAudio & {
+  platformName?: string;
+  audioSourceName?: string;
+  match?: SpotifyTrackMatch;
 };
 
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
@@ -47,7 +65,6 @@ const platforms: Record<string, MusicPlatform> = {
     aliases: ['sp'],
     hostPattern: /(^|\.)spotify\.com$/,
     searchInput: (query) => `ytsearch5:${query}`,
-    autoSearchInput: (query) => `https://open.spotify.com/search/${encodeURIComponent(query)}`,
   },
   soundcloud: {
     name: 'soundcloud',
@@ -64,7 +81,7 @@ const platforms: Record<string, MusicPlatform> = {
   },
 };
 
-const autoMusicPlatformOrder = [platforms.youtube, platforms.spotify, platforms.soundcloud, platforms.newgrounds];
+let spotifyToken: { value: string; expiresAt: number } | null = null;
 
 function normalizeUrl(input: string, platform: MusicPlatform): string | null {
   try {
@@ -125,21 +142,66 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
     return;
   }
 
-  const sources = httpUrl
+  const sources = httpUrl && !platform
+    ? await autoMusicSources(input, httpUrl)
+    : httpUrl
     ? [{ label: platform?.name || httpUrl.hostname, input: (platform && normalizeUrl(input, platform)) || httpUrl.toString() }]
     : platform
       ? [{ label: platform.name, input: platform.searchInput(input), query: input }]
-      : autoMusicPlatformOrder.map((item) => ({
-          label: item.name,
-          input: (item.autoSearchInput || item.searchInput)(input),
-          query: input,
-        }));
+      : await autoMusicSources(input);
   const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
-  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input);
+  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input, audio.match, audio.audioSourceName);
 }
 
-async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAudio & { platformName?: string }> {
+async function autoMusicSources(input: string, url?: URL): Promise<MusicSource[]> {
+  const spotifyMatch = await spotifyMatchForRequest(input, url);
+  const spotifySources = spotifyMatch
+    ? [
+        {
+          label: 'spotify',
+          input: platforms.youtube.searchInput(spotifyMatch.query),
+          query: spotifyMatch.query,
+          match: spotifyMatch,
+          audioSourceLabel: 'youtube-music',
+        },
+        {
+          label: 'spotify',
+          input: platforms.soundcloud.searchInput(spotifyMatch.query),
+          query: spotifyMatch.query,
+          match: spotifyMatch,
+          audioSourceLabel: 'soundcloud',
+        },
+      ]
+    : [];
+
+  if (url) {
+    return spotifySources.length
+      ? spotifySources
+      : [{ label: url.hostname, input: url.toString() }];
+  }
+
+  return [
+    {
+      label: platforms.youtube.name,
+      input: platforms.youtube.searchInput(input),
+      query: input,
+    },
+    ...spotifySources,
+    {
+      label: platforms.soundcloud.name,
+      input: platforms.soundcloud.searchInput(input),
+      query: input,
+    },
+    {
+      label: platforms.newgrounds.name,
+      input: platforms.newgrounds.searchInput(input),
+      query: input,
+    },
+  ];
+}
+
+async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedMusic> {
   let lastError: unknown;
   const uniqueSources = sources.filter(
     (source, index) => sources.findIndex((item) => item.input === source.input) === index
@@ -149,7 +211,12 @@ async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAud
     const source = uniqueSources[i];
     try {
       const input = await bestDownloadInput(source);
-      return { ...(await downloadYtDlpAudioFile(input)), platformName: source.label };
+      return {
+        ...(await downloadYtDlpAudioFile(input)),
+        platformName: source.label,
+        audioSourceName: source.audioSourceLabel || source.label,
+        match: source.match,
+      };
     } catch (err) {
       const log = i === uniqueSources.length - 1 ? logger.warn.bind(logger) : logger.info.bind(logger);
       log({ platform: source.label, source: safeSource(source.input), error: errorSummary(err) }, 'Music audio source failed');
@@ -164,14 +231,14 @@ async function bestDownloadInput(source: MusicSource): Promise<string> {
 
   const results = await searchYtDlp(source.input, 5);
   const best = results
-    .map((result) => ({ result, score: relevanceScore(source.query!, result) }))
+    .map((result) => ({ result, score: relevanceScore(source.query!, result, source.match?.durationMs) }))
     .sort((a, b) => b.score - a.score)[0]?.result;
   const url = best?.webpageUrl || best?.url;
 
   return url && /^https?:\/\//i.test(url) ? url : source.input;
 }
 
-function relevanceScore(query: string, result: YtDlpSearchResult): number {
+function relevanceScore(query: string, result: YtDlpSearchResult, durationMs?: number): number {
   const queryText = normalizeSearchText(query);
   const title = normalizeSearchText(result.title || '');
   const uploader = normalizeSearchText(result.uploader || '');
@@ -187,6 +254,12 @@ function relevanceScore(query: string, result: YtDlpSearchResult): number {
   if (!tokens.includes('remix') && title.includes('remix')) score -= 2;
   if (!tokens.includes('instrumental') && title.includes('instrumental')) score -= 3;
   if (!tokens.includes('karaoke') && title.includes('karaoke')) score -= 3;
+  if (durationMs && result.durationSeconds) {
+    const diff = Math.abs(result.durationSeconds - Math.round(durationMs / 1000));
+    if (diff <= 3) score += 8;
+    else if (diff <= 8) score += 4;
+    else if (diff >= 30) score -= 5;
+  }
 
   return score;
 }
@@ -213,22 +286,172 @@ function errorSummary(err: unknown): string {
   return err instanceof Error ? err.message.split('\n')[0] : String(err);
 }
 
+function isSpotifyUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return host === 'open.spotify.com' || host.endsWith('.spotify.com');
+}
+
+function spotifyTrackIdFromUrl(url: URL): string | null {
+  if (!isSpotifyUrl(url)) return null;
+  const [, type, id] = url.pathname.split('/');
+  return type === 'track' && /^[A-Za-z0-9]+$/.test(id || '') ? id : null;
+}
+
+async function spotifyAccessToken(): Promise<string | null> {
+  const clientId = config.SPOTIFY_CLIENT_ID?.trim();
+  const clientSecret = config.SPOTIFY_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+
+  if (spotifyToken && spotifyToken.expiresAt > Date.now() + 30_000) {
+    return spotifyToken.value;
+  }
+
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ grant_type: 'client_credentials' }),
+  });
+
+  if (!response.ok) {
+    logger.warn({ status: response.status }, 'Spotify token request failed');
+    return null;
+  }
+
+  const data = await response.json() as { access_token?: string; expires_in?: number };
+  if (!data.access_token) return null;
+
+  spotifyToken = {
+    value: data.access_token,
+    expiresAt: Date.now() + Math.max(60, data.expires_in || 3600) * 1000,
+  };
+
+  return spotifyToken.value;
+}
+
+async function spotifyApi(path: string): Promise<Record<string, unknown> | null> {
+  const token = await spotifyAccessToken();
+  if (!token) return null;
+
+  const response = await fetch(`https://api.spotify.com/v1${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    logger.info({ status: response.status, path: path.split('?')[0] }, 'Spotify metadata request failed');
+    return null;
+  }
+
+  const data = await response.json();
+  return data && typeof data === 'object' ? data as Record<string, unknown> : null;
+}
+
+function spotifyTrackFromObject(item: Record<string, unknown> | null): SpotifyTrackMatch | null {
+  if (!item) return null;
+
+  const title = typeof item.name === 'string' ? item.name : '';
+  const artists = Array.isArray(item.artists)
+    ? item.artists
+        .map((artist) => artist && typeof artist === 'object' && 'name' in artist ? String(artist.name || '') : '')
+        .filter(Boolean)
+        .join(', ')
+    : '';
+  const album = item.album && typeof item.album === 'object' && 'name' in item.album ? String(item.album.name || '') : undefined;
+  const durationMs = typeof item.duration_ms === 'number' ? item.duration_ms : undefined;
+  const externalUrls = item.external_urls && typeof item.external_urls === 'object' ? item.external_urls as Record<string, unknown> : {};
+  const url = typeof externalUrls.spotify === 'string' ? externalUrls.spotify : '';
+
+  if (!title || !artists || !url) return null;
+
+  return {
+    title,
+    artists,
+    album,
+    durationMs,
+    url,
+    query: `${title} ${artists}`,
+  };
+}
+
+async function spotifyTrackById(id: string): Promise<SpotifyTrackMatch | null> {
+  return spotifyTrackFromObject(await spotifyApi(`/tracks/${encodeURIComponent(id)}`));
+}
+
+async function searchSpotifyTrack(query: string): Promise<SpotifyTrackMatch | null> {
+  const params = new URLSearchParams({
+    type: 'track',
+    limit: '5',
+    q: query,
+  });
+  if (config.SPOTIFY_MARKET?.trim()) params.set('market', config.SPOTIFY_MARKET.trim());
+
+  const data = await spotifyApi(`/search?${params.toString()}`);
+  const tracks = data?.tracks && typeof data.tracks === 'object' ? data.tracks as Record<string, unknown> : null;
+  const items = Array.isArray(tracks?.items) ? tracks.items : [];
+  const matches = items
+    .map((item) => spotifyTrackFromObject(item && typeof item === 'object' ? item as Record<string, unknown> : null))
+    .filter((item): item is SpotifyTrackMatch => Boolean(item));
+
+  return matches
+    .map((match) => ({ match, score: spotifyRelevanceScore(query, match) }))
+    .sort((a, b) => b.score - a.score)[0]?.match || null;
+}
+
+function spotifyRelevanceScore(query: string, match: SpotifyTrackMatch): number {
+  const queryText = normalizeSearchText(query);
+  const title = normalizeSearchText(match.title);
+  const artists = normalizeSearchText(match.artists);
+  const combined = `${title} ${artists}`.trim();
+  const tokens = [...new Set(queryText.split(' ').filter((token) => token.length > 1))];
+  let score = combined.includes(queryText) ? 25 : 0;
+
+  for (const token of tokens) {
+    if (title.includes(token)) score += 5;
+    else if (artists.includes(token)) score += 2;
+  }
+
+  return score;
+}
+
+async function spotifyMatchForRequest(input: string, url?: URL): Promise<SpotifyTrackMatch | null> {
+  try {
+    const trackId = url ? spotifyTrackIdFromUrl(url) : null;
+    if (trackId) return spotifyTrackById(trackId);
+    if (url && isSpotifyUrl(url)) {
+      const searchText = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
+      return searchText ? searchSpotifyTrack(searchText) : null;
+    }
+    return searchSpotifyTrack(input);
+  } catch (err) {
+    logger.info({ err: errorSummary(err) }, 'Spotify metadata lookup failed');
+    return null;
+  }
+}
+
 async function sendMusicInfo(
   ctx: Parameters<Command['execute']>[0],
   info?: DownloadedMediaInfo,
   platformName?: string,
-  requested?: string
+  requested?: string,
+  match?: SpotifyTrackMatch,
+  audioSourceName?: string
 ): Promise<void> {
   if (!info) return;
 
   const lines = [
     'Music info',
     requested && !parseHttpUrl(requested) ? `Requested: ${requested}` : undefined,
+    match ? `Spotify match: ${match.title} - ${match.artists}` : undefined,
+    match?.album ? `Album: ${match.album}` : undefined,
+    match?.url ? `Spotify link: ${match.url}` : undefined,
     info.title ? `Result title: ${info.title}` : undefined,
     info.uploader ? `Uploader: ${info.uploader}` : undefined,
-    `Source platform: ${platformName || prettyPlatform(info.extractor)}`,
+    `Matched via: ${platformName || prettyPlatform(info.extractor)}`,
+    audioSourceName && audioSourceName !== platformName ? `Audio source: ${audioSourceName}` : undefined,
     info.duration ? `Duration: ${info.duration}` : undefined,
-    info.webpageUrl ? `Source: ${info.webpageUrl}` : undefined,
+    info.webpageUrl ? `Download source: ${info.webpageUrl}` : undefined,
   ].filter(Boolean);
 
   await ctx.socket.sendMessage(ctx.message.key.remoteJid!, { text: lines.join('\n'), linkPreview: null });

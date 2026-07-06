@@ -27,6 +27,7 @@ export type DownloadedMediaInfo = {
 export type YtDlpSearchResult = DownloadedMediaInfo & {
   id?: string;
   url?: string;
+  durationSeconds?: number;
 };
 
 export function isTikTokUrl(input: string): boolean {
@@ -173,6 +174,7 @@ function parseJsonLines(stdout: string): YtDlpSearchResult[] {
       title: typeof item.title === 'string' ? item.title : undefined,
       uploader: typeof item.uploader === 'string' ? item.uploader : undefined,
       duration: typeof item.duration_string === 'string' ? item.duration_string : undefined,
+      durationSeconds: typeof item.duration === 'number' ? item.duration : undefined,
       webpageUrl: typeof item.webpage_url === 'string' ? item.webpage_url : undefined,
       extractor: typeof item.extractor_key === 'string' ? item.extractor_key : undefined,
       url: typeof item.url === 'string' ? item.url : undefined,
