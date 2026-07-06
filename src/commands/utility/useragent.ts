@@ -3,7 +3,7 @@ import { Command, CommandCategory } from '../../types';
 
 export const UserAgentCommand: Command = {
   name: 'useragent',
-  aliases: ['ua', 'parseua'],
+  aliases: ['ua', 'parseua', 'uaparse', 'deviceinfo'],
   category: CommandCategory.NETWORK,
   description: 'Parse a browser user agent string',
   usage: 'useragent <user-agent>',

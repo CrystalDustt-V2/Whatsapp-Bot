@@ -69,12 +69,6 @@ const providers: SearchProvider[] = [
     url: (query) => `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${query} wallpaper`)}`,
   },
   {
-    name: 'whois',
-    aliases: ['domaininfo'],
-    description: 'Look up public domain registration info',
-    url: (query) => `https://www.whois.com/whois/${encodeURIComponent(query)}`,
-  },
-  {
     name: 'mathsolver',
     aliases: ['solve'],
     description: 'Open a math solver search',

@@ -11,6 +11,8 @@ coverage/
 /notes.txt
 /runtime.env
 /openai keys.txt
+skills-lock.json
+.agents/
 
 /src/generated/prisma
 

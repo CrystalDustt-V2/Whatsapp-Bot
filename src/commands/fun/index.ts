@@ -11,6 +11,8 @@ export {
   CompatibilityCommand as compatibility,
   RoastCommand as roast,
   SpinWheelCommand as spin,
+  CoinFlipCommand as coinflip,
+  DiceCommand as dice,
 } from './social';
 export {
   MathQuizCommand as mathquiz,

@@ -1,5 +1,6 @@
 import { Command, CommandCategory } from '../types';
 import { downloadYtDlpAudioFile, DownloadedAudio } from '../services/tiktok-downloader';
+import logger from '../core/logger';
 
 type MusicPlatform = {
   name: string;
@@ -120,15 +121,29 @@ async function downloadFirstAudio(sources: string[]): Promise<DownloadedAudio> {
     try {
       return await downloadYtDlpAudioFile(source);
     } catch (err) {
+      logger.warn({ source: safeSource(source), err }, 'Music audio source failed');
       lastError = err;
     }
   }
   throw lastError;
 }
 
+function safeSource(source: string): string {
+  try {
+    const url = new URL(source);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return source;
+  }
+}
+
 function playFailure(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
   if (message.includes('yt-dlp is not installed')) return 'yt-dlp is not installed on this server.';
+  if (message.includes('yt-dlp is not executable')) return 'yt-dlp exists but is not executable. Run chmod 755 on it.';
+  if (message.includes('yt-dlp binary cannot run')) return 'yt-dlp binary cannot run on this server. Upload the Linux binary.';
   if (message.includes('too large')) return 'The audio file is over 20 MB.';
   return 'The source did not provide downloadable audio.';
 }

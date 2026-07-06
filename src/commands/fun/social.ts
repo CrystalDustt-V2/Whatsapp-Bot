@@ -124,3 +124,31 @@ export const SpinWheelCommand: Command = {
     await ctx.reply(`Wheel picked: ${winner}`);
   },
 };
+
+export const CoinFlipCommand: Command = {
+  name: 'coinflip',
+  aliases: ['coin', 'flip'],
+  category: CommandCategory.FUN,
+  description: 'Flip a coin',
+  usage: 'coinflip',
+  async execute(ctx) {
+    await ctx.reply(`Coin: ${Math.random() < 0.5 ? 'heads' : 'tails'}`);
+  },
+};
+
+export const DiceCommand: Command = {
+  name: 'dice',
+  aliases: ['roll'],
+  category: CommandCategory.FUN,
+  description: 'Roll a dice',
+  usage: 'dice [sides]',
+  async execute(ctx) {
+    const sides = Number(ctx.args[0] || 6);
+    if (!Number.isInteger(sides) || sides < 2 || sides > 1000) {
+      await ctx.reply('Usage: .dice [sides]\nSides must be 2-1000.');
+      return;
+    }
+
+    await ctx.reply(`Dice d${sides}: ${Math.floor(Math.random() * sides) + 1}`);
+  },
+};

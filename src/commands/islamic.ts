@@ -30,6 +30,34 @@ const PRAYER_TIMES = [
   ['Isha', 'Isya'],
 ] as const;
 
+const DAILY_DOAS = [
+  {
+    title: 'Before sleep',
+    arabic: 'Bismika Allahumma ahya wa amut',
+    meaning: 'In Your name, O Allah, I live and die.',
+  },
+  {
+    title: 'After waking up',
+    arabic: 'Alhamdulillahil-ladhi ahyana ba da ma amatana wa ilaihin-nushur',
+    meaning: 'Praise is to Allah who gave us life after death, and to Him is the return.',
+  },
+  {
+    title: 'Before eating',
+    arabic: 'Bismillah',
+    meaning: 'In the name of Allah.',
+  },
+  {
+    title: 'After eating',
+    arabic: 'Alhamdulillahilladhi at amana wa saqana wa ja alana minal-muslimin',
+    meaning: 'Praise is to Allah who fed us, gave us drink, and made us Muslims.',
+  },
+  {
+    title: 'For parents',
+    arabic: 'Rabbighfir li waliwalidayya warhamhuma kama rabbayani saghira',
+    meaning: 'My Lord, forgive me and my parents, and have mercy on them as they raised me when I was small.',
+  },
+] as const;
+
 function cleanPlace(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
@@ -97,6 +125,11 @@ function parseGregorianDate(input: string): Date | null {
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
 }
 
+function doaForToday(): (typeof DAILY_DOAS)[number] {
+  const day = Math.floor(Date.now() / 86_400_000);
+  return DAILY_DOAS[day % DAILY_DOAS.length];
+}
+
 export const PrayerTimesCommand: Command = {
   name: 'prayer',
   aliases: ['prayertime', 'jadwalsholat', 'sholat'],
@@ -125,6 +158,18 @@ export const PrayerTimesCommand: Command = {
     } catch {
       await ctx.reply(`Could not get prayer times for ${place.city}, ${place.country}.`);
     }
+  },
+};
+
+export const DailyDoaCommand: Command = {
+  name: 'doa',
+  aliases: ['dailydoa', 'doaharian'],
+  category: CommandCategory.ISLAMIC,
+  description: 'Show a short daily doa',
+  usage: 'doa',
+  async execute(ctx) {
+    const doa = doaForToday();
+    await ctx.reply(`*Daily Doa*\n${doa.title}\n\n${doa.arabic}\n\nMeaning: ${doa.meaning}`);
   },
 };
 
@@ -186,4 +231,4 @@ export const HijriDateCommand: Command = {
   },
 };
 
-export const IslamicCommands = [PrayerTimesCommand, QuranSearchCommand, HadithSearchCommand, HijriDateCommand];
+export const IslamicCommands = [PrayerTimesCommand, DailyDoaCommand, QuranSearchCommand, HadithSearchCommand, HijriDateCommand];

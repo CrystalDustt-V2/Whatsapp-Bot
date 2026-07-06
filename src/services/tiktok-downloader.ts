@@ -3,6 +3,7 @@ import { access, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import logger from '../core/logger';
 
 const execFileAsync = promisify(execFile);
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -48,6 +49,19 @@ async function ytDlpBinary(): Promise<string> {
   return 'yt-dlp';
 }
 
+function tail(value: unknown, max = 1200): string {
+  return String(value || '').replace(/https?:\/\/[^\s]+/g, (url) => {
+    try {
+      const parsed = new URL(url);
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString();
+    } catch {
+      return url;
+    }
+  }).slice(-max);
+}
+
 async function readDownloadedFile(dir: string, prefix: string, maxBytes: number, label: string): Promise<{ buffer: Buffer; name: string }> {
   const files = await readdir(dir);
   const file = files.find((name) => name.startsWith(prefix));
@@ -66,6 +80,16 @@ async function runYtDlp(args: string[]): Promise<void> {
   } catch (err) {
     const code = typeof err === 'object' && err && 'code' in err ? String(err.code) : '';
     if (code === 'ENOENT') throw new Error('yt-dlp is not installed on this server');
+    if (code === 'EACCES') throw new Error('yt-dlp is not executable on this server');
+    if (code === 'ENOEXEC') throw new Error('yt-dlp binary cannot run on this server');
+    logger.warn(
+      {
+        code,
+        stderr: tail(typeof err === 'object' && err && 'stderr' in err ? err.stderr : ''),
+        stdout: tail(typeof err === 'object' && err && 'stdout' in err ? err.stdout : ''),
+      },
+      'yt-dlp command failed',
+    );
     throw err;
   }
 }

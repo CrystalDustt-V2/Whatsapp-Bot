@@ -33,4 +33,6 @@ export {
   DnsLookupCommand as dns,
   HttpCheckCommand as httpcheck,
   PortCheckCommand as portcheck,
+  HeadersCommand as headers,
+  WhoisCommand as whois,
 } from './network';

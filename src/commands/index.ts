@@ -19,6 +19,8 @@ import {
 import { SearchCommands } from './search';
 import { SocialCommands } from './social';
 import { IslamicCommands } from './islamic';
+import { EconomyCommands } from './economy';
+import { MarketplaceCommands } from './marketplace';
 import { TikTokCommand, TikTokAudioCommand } from './tiktok';
 import {
   PlayCommand,
@@ -61,6 +63,8 @@ import {
   dns,
   httpcheck,
   portcheck,
+  headers,
+  whois,
 } from './utility';
 import {
   joke,
@@ -75,6 +79,8 @@ import {
   compatibility,
   roast,
   spin,
+  coinflip,
+  dice,
   mathquiz,
   trivia,
   guessword,
@@ -159,6 +165,12 @@ export function loadCommands(): void {
   for (const command of IslamicCommands) {
     commandRegistry.register(command);
   }
+  for (const command of EconomyCommands) {
+    commandRegistry.register(command);
+  }
+  for (const command of MarketplaceCommands) {
+    commandRegistry.register(command);
+  }
   commandRegistry.register(TikTokCommand);
   commandRegistry.register(TikTokAudioCommand);
   commandRegistry.register(PlayCommand);
@@ -199,6 +211,8 @@ export function loadCommands(): void {
   commandRegistry.register(dns);
   commandRegistry.register(httpcheck);
   commandRegistry.register(portcheck);
+  commandRegistry.register(headers);
+  commandRegistry.register(whois);
   commandRegistry.register(joke);
   commandRegistry.register(quote);
   commandRegistry.register(meme);
@@ -211,6 +225,8 @@ export function loadCommands(): void {
   commandRegistry.register(compatibility);
   commandRegistry.register(roast);
   commandRegistry.register(spin);
+  commandRegistry.register(coinflip);
+  commandRegistry.register(dice);
   commandRegistry.register(mathquiz);
   commandRegistry.register(trivia);
   commandRegistry.register(guessword);
