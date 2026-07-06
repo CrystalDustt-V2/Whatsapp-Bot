@@ -7,6 +7,12 @@ type MusicPlatform = {
   aliases: string[];
   hostPattern: RegExp;
   searchInput(query: string): string;
+  autoSearchInput?(query: string): string;
+};
+
+type MusicSource = {
+  label: string;
+  input: string;
 };
 
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
@@ -34,6 +40,7 @@ const platforms: Record<string, MusicPlatform> = {
     aliases: ['sp'],
     hostPattern: /(^|\.)spotify\.com$/,
     searchInput: (query) => `ytsearch1:${query}`,
+    autoSearchInput: (query) => `https://open.spotify.com/search/${encodeURIComponent(query)}`,
   },
   soundcloud: {
     name: 'soundcloud',
@@ -46,8 +53,11 @@ const platforms: Record<string, MusicPlatform> = {
     aliases: ['ng', 'ngaudio'],
     hostPattern: /(^|\.)newgrounds\.com$/,
     searchInput: (query) => `ytsearch1:${query}`,
+    autoSearchInput: (query) => `https://www.newgrounds.com/search/conduct/audio?terms=${encodeURIComponent(query)}`,
   },
 };
+
+const autoMusicPlatformOrder = [platforms.youtube, platforms.spotify, platforms.soundcloud, platforms.newgrounds];
 
 function normalizeUrl(input: string, platform: MusicPlatform): string | null {
   try {
@@ -104,30 +114,36 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
     const audio = await fetchAudio(httpUrl.toString());
     if (!audio) throw new Error('Direct audio fetch failed');
     await sendAudio(ctx, audio.buffer, audio.mimetype);
-    await sendMusicInfo(ctx, { webpageUrl: httpUrl.toString(), extractor: 'Direct audio' }, platform);
+    await sendMusicInfo(ctx, { webpageUrl: httpUrl.toString(), extractor: 'Direct audio' }, platform?.name);
     return;
   }
 
-  const source = httpUrl
-    ? (platform && normalizeUrl(input, platform)) || httpUrl.toString()
-    : platform?.searchInput(input) || platforms.youtube.searchInput(input);
-  const fallback = httpUrl || platform?.name === platforms.soundcloud.name ? [] : [platforms.soundcloud.searchInput(input)];
-  const audio = await downloadFirstAudio([source, ...fallback]);
+  const sources = httpUrl
+    ? [{ label: platform?.name || httpUrl.hostname, input: (platform && normalizeUrl(input, platform)) || httpUrl.toString() }]
+    : platform
+      ? [{ label: platform.name, input: platform.searchInput(input) }]
+      : autoMusicPlatformOrder.map((item) => ({
+          label: item.name,
+          input: (item.autoSearchInput || item.searchInput)(input),
+        }));
+  const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
-  await sendMusicInfo(ctx, audio.info, platform);
+  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name);
 }
 
-async function downloadFirstAudio(sources: string[]): Promise<DownloadedAudio> {
+async function downloadFirstAudio(sources: MusicSource[]): Promise<DownloadedAudio & { platformName?: string }> {
   let lastError: unknown;
-  const uniqueSources = [...new Set(sources)];
+  const uniqueSources = sources.filter(
+    (source, index) => sources.findIndex((item) => item.input === source.input) === index
+  );
 
   for (let i = 0; i < uniqueSources.length; i += 1) {
     const source = uniqueSources[i];
     try {
-      return await downloadYtDlpAudioFile(source);
+      return { ...(await downloadYtDlpAudioFile(source.input)), platformName: source.label };
     } catch (err) {
       const log = i === uniqueSources.length - 1 ? logger.warn.bind(logger) : logger.info.bind(logger);
-      log({ source: safeSource(source), error: errorSummary(err) }, 'Music audio source failed');
+      log({ platform: source.label, source: safeSource(source.input), error: errorSummary(err) }, 'Music audio source failed');
       lastError = err;
     }
   }
@@ -152,7 +168,7 @@ function errorSummary(err: unknown): string {
 async function sendMusicInfo(
   ctx: Parameters<Command['execute']>[0],
   info?: DownloadedMediaInfo,
-  requestedPlatform?: MusicPlatform
+  platformName?: string
 ): Promise<void> {
   if (!info) return;
 
@@ -160,7 +176,7 @@ async function sendMusicInfo(
     'Music info',
     info.title ? `Title: ${info.title}` : undefined,
     info.uploader ? `Artist/Channel: ${info.uploader}` : undefined,
-    `Platform: ${requestedPlatform?.name || prettyPlatform(info.extractor)}`,
+    `Platform: ${platformName || prettyPlatform(info.extractor)}`,
     info.duration ? `Duration: ${info.duration}` : undefined,
     info.webpageUrl ? `Source: ${info.webpageUrl}` : undefined,
   ].filter(Boolean);
