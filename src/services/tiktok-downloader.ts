@@ -85,7 +85,14 @@ async function readDownloadedFile(dir: string, prefix: string, maxBytes: number,
 
 async function runYtDlp(args: string[]): Promise<string> {
   const cookiesPath = process.env.YT_DLP_COOKIES_PATH?.trim();
-  const finalArgs = cookiesPath ? ['--cookies', cookiesPath, ...args] : args;
+  const jsRuntime = process.env.YT_DLP_JS_RUNTIME?.trim();
+  const remoteComponents = process.env.YT_DLP_REMOTE_COMPONENTS?.trim();
+  const finalArgs = [
+    ...(cookiesPath ? ['--cookies', cookiesPath] : []),
+    ...(jsRuntime ? ['--js-runtimes', jsRuntime] : []),
+    ...(remoteComponents ? ['--remote-components', remoteComponents] : []),
+    ...args,
+  ];
 
   if (cookiesPath && !(await fileExists(cookiesPath))) {
     throw new Error('yt-dlp cookies file was not found on this server');
@@ -105,6 +112,9 @@ async function runYtDlp(args: string[]): Promise<string> {
     }
     if (/does not look like a netscape|cookies file/i.test(stderr)) throw new Error('yt-dlp cookies file is invalid');
     if (/sign in to confirm|cookies/i.test(stderr)) throw new Error('YouTube requires cookies on this server');
+    if (/signature solving failed|challenge solving failed|requested format is not available/i.test(stderr)) {
+      throw new Error('YouTube needs a JS runtime/EJS solver on this server');
+    }
     if (/known to use DRM|DRM protection/i.test(stderr)) throw new Error('Source uses DRM and cannot be downloaded');
     logger.warn(
       {

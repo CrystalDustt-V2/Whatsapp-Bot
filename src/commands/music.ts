@@ -199,6 +199,7 @@ function playFailure(err: unknown): string {
   if (message.includes('cookies file was not found')) return 'Configured yt-dlp cookies file was not found.';
   if (message.includes('cookies file is invalid')) return 'yt-dlp cookies file is invalid. Export it in Netscape cookies.txt format.';
   if (message.includes('YouTube requires cookies')) return 'YouTube blocked this server. Upload cookies.txt and configure yt-dlp cookies.';
+  if (message.includes('JS runtime/EJS')) return 'YouTube needs a JS runtime/EJS solver. Configure YT_DLP_JS_RUNTIME and YT_DLP_REMOTE_COMPONENTS.';
   if (message.includes('DRM')) return 'That source uses DRM and cannot be downloaded.';
   if (message.includes('too large')) return 'The audio file is over 20 MB.';
   return 'The source did not provide downloadable audio.';
