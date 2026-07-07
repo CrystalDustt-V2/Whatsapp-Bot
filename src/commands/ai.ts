@@ -22,16 +22,14 @@ type ToolCall = {
   };
 };
 
-const AI_PROVIDER = (config.AI_PROVIDER || '').toLowerCase();
-const AI_API_BASE_URL = (config.AI_API_BASE_URL || (AI_PROVIDER === 'puter' ? 'puter' : 'https://openrouter.ai/api/v1')).replace(/\/$/, '');
-const IS_PUTER = AI_PROVIDER === 'puter' || AI_API_BASE_URL.toLowerCase() === 'puter';
+const AI_API_BASE_URL = (config.AI_API_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+const IS_PUTER = AI_API_BASE_URL.toLowerCase() === 'puter';
 const IS_POLLINATIONS = AI_API_BASE_URL.includes('pollinations.ai');
 const IS_GEMINI = AI_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const AI_API_KEY = IS_GEMINI ? config.AI_API_KEY : config.AI_API_KEY || config.OPENROUTER_API_KEY;
 const AI_MODEL = config.AI_MODEL || (IS_PUTER ? config.PUTER_CHAT_MODEL || 'gpt-5-nano' : IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI ? '' : config.OPENROUTER_MODEL);
 const AI_IMAGE_API_BASE_URL = (config.AI_IMAGE_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
-const AI_IMAGE_PROVIDER = (config.AI_IMAGE_PROVIDER || '').toLowerCase();
-const IS_IMAGE_PUTER = AI_IMAGE_PROVIDER === 'puter' || AI_IMAGE_API_BASE_URL.toLowerCase() === 'puter';
+const IS_IMAGE_PUTER = AI_IMAGE_API_BASE_URL.toLowerCase() === 'puter';
 const IS_IMAGE_POLLINATIONS = AI_IMAGE_API_BASE_URL.includes('pollinations.ai');
 const IS_IMAGE_GEMINI = AI_IMAGE_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const IS_IMAGE_CLOUDFLARE = AI_IMAGE_API_BASE_URL.includes('api.cloudflare.com');
@@ -39,14 +37,12 @@ const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || (IS_IMAGE_GEMINI ? config.AI
 const AI_IMAGE_MODEL = config.AI_IMAGE_MODEL || (IS_IMAGE_PUTER ? config.PUTER_IMAGE_MODEL : IS_IMAGE_POLLINATIONS ? 'sana' : config.OPENROUTER_IMAGE_MODEL);
 const AI_IMAGE_ENDPOINT = config.AI_IMAGE_ENDPOINT || (IS_IMAGE_POLLINATIONS ? '/prompt' : config.AI_API_BASE_URL ? '/images/generations' : '/images');
 const AI_TTS_API_BASE_URL = (config.AI_TTS_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
-const AI_TTS_PROVIDER = (config.AI_TTS_PROVIDER || '').toLowerCase();
-const IS_TTS_PUTER = AI_TTS_PROVIDER === 'puter' || AI_TTS_API_BASE_URL.toLowerCase() === 'puter';
+const IS_TTS_PUTER = AI_TTS_API_BASE_URL.toLowerCase() === 'puter';
 const AI_TTS_API_KEY = config.AI_TTS_API_KEY || AI_API_KEY;
 const IS_TTS_POLLINATIONS = AI_TTS_API_BASE_URL.includes('pollinations.ai');
 const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_PUTER ? config.PUTER_TTS_MODEL : IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
 const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_PUTER ? config.PUTER_TTS_VOICE || '' : IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
-const AI_STT_PROVIDER = (config.AI_STT_PROVIDER || '').toLowerCase();
-const IS_STT_PUTER = AI_STT_PROVIDER === 'puter' || IS_PUTER;
+const IS_STT_PUTER = IS_PUTER;
 const AI_STT_MODEL = config.AI_STT_MODEL || config.PUTER_STT_MODEL;
 const AI_EMBEDDING_API_BASE_URL = (config.AI_EMBEDDING_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
 const IS_EMBEDDING_PUTER = AI_EMBEDDING_API_BASE_URL.toLowerCase() === 'puter' || IS_PUTER;
@@ -563,7 +559,7 @@ function imageAnalysisRequest(input: string): { url: string; prompt: string } | 
 
 async function transcribeAudio(input: string): Promise<string> {
   if (!IS_STT_PUTER) {
-    return 'Speech-to-text is currently wired through Puter.js. Set AI_STT_PROVIDER=puter or AI_PROVIDER=puter first.';
+    return 'Speech-to-text is currently wired through Puter.js. Set AI_API_BASE_URL=puter first.';
   }
 
   const result = await puterAI.speechToText(input, {
@@ -578,7 +574,7 @@ async function transcribeAudio(input: string): Promise<string> {
 
 async function analyzeImage(input: { url: string; prompt: string }): Promise<string> {
   if (!IS_PUTER) {
-    return 'Image analysis is currently wired through Puter.js. Set AI_PROVIDER=puter first.';
+    return 'Image analysis is currently wired through Puter.js. Set AI_API_BASE_URL=puter first.';
   }
 
   const result = await puterAI.analyzeImage(input.url, {

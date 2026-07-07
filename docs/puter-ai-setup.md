@@ -37,7 +37,7 @@ For this always-on WhatsApp bot, use the token flow. Browser login is useful for
 Use Puter for everything:
 
 ```env
-AI_PROVIDER=puter
+AI_API_BASE_URL=puter
 PUTER_AUTH_TOKEN=your_token_here
 PUTER_CHAT_MODEL=gpt-5-nano
 ```
@@ -51,13 +51,14 @@ PUTER_TTS_MODEL=model1,model2
 PUTER_STT_MODEL=model1|model2
 ```
 
-Or enable Puter only for a specific feature:
+Or enable Puter only for a specific media feature:
 
 ```env
-AI_IMAGE_PROVIDER=puter
-AI_TTS_PROVIDER=puter
-AI_STT_PROVIDER=puter
+AI_IMAGE_API_BASE_URL=puter
+AI_TTS_API_BASE_URL=puter
 ```
+
+Speech-to-text and image analysis currently use the chat Puter connection, so set `AI_API_BASE_URL=puter` for those.
 
 Supported bot paths:
 
