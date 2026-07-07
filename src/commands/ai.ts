@@ -1035,10 +1035,6 @@ ${commandList()}`,
         { role: 'user', content: input },
       ];
 
-      if (IS_PUTER) {
-        await replyText(ctx, 'Thinking with Puter AI...');
-      }
-
       let first = await chat(messages);
       let assistant = first?.choices?.[0]?.message;
       let toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
