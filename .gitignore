@@ -7,12 +7,10 @@ temp/
 *.log
 .DS_Store
 coverage/
-/features list.txt
-/notes.txt
 /runtime.env
-/openai keys.txt
 skills-lock.json
 .agents/
+user-specific-files/
 
 /src/generated/prisma
 

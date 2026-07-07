@@ -142,38 +142,63 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
     return;
   }
 
-  const sources = httpUrl && !platform
-    ? await autoMusicSources(input, httpUrl)
-    : httpUrl
-    ? [{ label: platform?.name || httpUrl.hostname, input: (platform && normalizeUrl(input, platform)) || httpUrl.toString() }]
-    : platform
-      ? [{ label: platform.name, input: platform.searchInput(input), query: input }]
-      : await autoMusicSources(input);
+  let sources: MusicSource[];
+  if (platform?.name === platforms.spotify.name) {
+    sources = await spotifyMusicSources(input, httpUrl);
+  } else if (httpUrl && !platform) {
+    sources = await autoMusicSources(input, httpUrl);
+  } else if (httpUrl) {
+    sources = [{ label: platform?.name || httpUrl.hostname, input: (platform && normalizeUrl(input, platform)) || httpUrl.toString() }];
+  } else if (platform) {
+    sources = [{ label: platform.name, input: platform.searchInput(input), query: input }];
+  } else {
+    sources = await autoMusicSources(input);
+  }
   const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
   await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input, audio.match, audio.audioSourceName);
 }
 
+function spotifyDownloadSources(spotifyMatch: SpotifyTrackMatch): MusicSource[] {
+  return [
+    {
+      label: 'spotify',
+      input: platforms.youtube.searchInput(spotifyMatch.query),
+      query: spotifyMatch.query,
+      match: spotifyMatch,
+      audioSourceLabel: 'youtube-music',
+    },
+    {
+      label: 'spotify',
+      input: platforms.soundcloud.searchInput(spotifyMatch.query),
+      query: spotifyMatch.query,
+      match: spotifyMatch,
+      audioSourceLabel: 'soundcloud',
+    },
+  ];
+}
+
+async function spotifyMusicSources(input: string, url?: URL | null): Promise<MusicSource[]> {
+  const spotifyMatch = await spotifyMatchForRequest(input, url || undefined);
+  if (spotifyMatch) return spotifyDownloadSources(spotifyMatch);
+
+  if (url && isSpotifyUrl(url)) {
+    throw new Error('Spotify metadata lookup failed');
+  }
+
+  return [
+    {
+      label: platforms.spotify.name,
+      input: platforms.spotify.searchInput(input),
+      query: input,
+      audioSourceLabel: 'youtube-music',
+    },
+  ];
+}
+
 async function autoMusicSources(input: string, url?: URL): Promise<MusicSource[]> {
   const spotifyMatch = await spotifyMatchForRequest(input, url);
-  const spotifySources = spotifyMatch
-    ? [
-        {
-          label: 'spotify',
-          input: platforms.youtube.searchInput(spotifyMatch.query),
-          query: spotifyMatch.query,
-          match: spotifyMatch,
-          audioSourceLabel: 'youtube-music',
-        },
-        {
-          label: 'spotify',
-          input: platforms.soundcloud.searchInput(spotifyMatch.query),
-          query: spotifyMatch.query,
-          match: spotifyMatch,
-          audioSourceLabel: 'soundcloud',
-        },
-      ]
-    : [];
+  const spotifySources = spotifyMatch ? spotifyDownloadSources(spotifyMatch) : [];
 
   if (url) {
     return spotifySources.length
@@ -472,16 +497,20 @@ function playFailure(err: unknown): string {
   if (message.includes('YouTube requires cookies')) return 'YouTube blocked this server. Upload cookies.txt and configure yt-dlp cookies.';
   if (message.includes('JS runtime/EJS')) return 'YouTube needs a JS runtime/EJS solver. Configure YT_DLP_JS_RUNTIME and YT_DLP_REMOTE_COMPONENTS.';
   if (message.includes('DRM')) return 'That source uses DRM and cannot be downloaded.';
+  if (message.includes('Spotify metadata lookup failed')) return 'Spotify track links need SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, or Spotify did not return that track.';
   if (message.includes('too large')) return 'The audio file is over 20 MB.';
   return 'The source did not provide downloadable audio.';
 }
 
 function createMusicCommand(platform: MusicPlatform): Command {
+  const isSpotify = platform.name === platforms.spotify.name;
   return {
     name: platform.name,
     aliases: platform.aliases,
     category: CommandCategory.DOWNLOADER,
-    description: `Play music from ${platform.name} as audio`,
+    description: isSpotify
+      ? 'Use Spotify metadata to find and play matching audio'
+      : `Play music from ${platform.name} as audio`,
     usage: `${platform.name} <song name|url>`,
     async execute(ctx) {
       const query = ctx.args.join(' ').trim();

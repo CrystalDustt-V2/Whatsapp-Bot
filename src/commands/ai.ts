@@ -1,6 +1,7 @@
 import config from '../config';
 import { commandRegistry } from '../core/command-registry';
 import logger from '../core/logger';
+import { createPuterAIService, type AIServiceTool } from '../services/ai-service';
 import { readAiMemoryContext } from '../services/message-memory';
 import { stickerEngine } from '../services/sticker-engine';
 import { BotContext, Command, CommandCategory } from '../types';
@@ -21,24 +22,34 @@ type ToolCall = {
   };
 };
 
-const AI_API_BASE_URL = (config.AI_API_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+const AI_PROVIDER = (config.AI_PROVIDER || '').toLowerCase();
+const AI_API_BASE_URL = (config.AI_API_BASE_URL || (AI_PROVIDER === 'puter' ? 'puter' : 'https://openrouter.ai/api/v1')).replace(/\/$/, '');
+const IS_PUTER = AI_PROVIDER === 'puter' || AI_API_BASE_URL.toLowerCase() === 'puter';
 const IS_POLLINATIONS = AI_API_BASE_URL.includes('pollinations.ai');
 const IS_GEMINI = AI_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const AI_API_KEY = IS_GEMINI ? config.AI_API_KEY : config.AI_API_KEY || config.OPENROUTER_API_KEY;
-const AI_MODEL = config.AI_MODEL || (IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI ? '' : config.OPENROUTER_MODEL);
+const AI_MODEL = config.AI_MODEL || (IS_PUTER ? config.PUTER_CHAT_MODEL || 'gpt-5-nano' : IS_POLLINATIONS ? 'openai-fast' : IS_GEMINI ? '' : config.OPENROUTER_MODEL);
 const AI_IMAGE_API_BASE_URL = (config.AI_IMAGE_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
+const AI_IMAGE_PROVIDER = (config.AI_IMAGE_PROVIDER || '').toLowerCase();
+const IS_IMAGE_PUTER = AI_IMAGE_PROVIDER === 'puter' || AI_IMAGE_API_BASE_URL.toLowerCase() === 'puter';
 const IS_IMAGE_POLLINATIONS = AI_IMAGE_API_BASE_URL.includes('pollinations.ai');
 const IS_IMAGE_GEMINI = AI_IMAGE_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const IS_IMAGE_CLOUDFLARE = AI_IMAGE_API_BASE_URL.includes('api.cloudflare.com');
 const AI_IMAGE_API_KEY = config.AI_IMAGE_API_KEY || (IS_IMAGE_GEMINI ? config.AI_API_KEY : IS_IMAGE_CLOUDFLARE ? '' : AI_API_KEY);
-const AI_IMAGE_MODEL = config.AI_IMAGE_MODEL || (IS_IMAGE_POLLINATIONS ? 'sana' : config.OPENROUTER_IMAGE_MODEL);
+const AI_IMAGE_MODEL = config.AI_IMAGE_MODEL || (IS_IMAGE_PUTER ? config.PUTER_IMAGE_MODEL : IS_IMAGE_POLLINATIONS ? 'sana' : config.OPENROUTER_IMAGE_MODEL);
 const AI_IMAGE_ENDPOINT = config.AI_IMAGE_ENDPOINT || (IS_IMAGE_POLLINATIONS ? '/prompt' : config.AI_API_BASE_URL ? '/images/generations' : '/images');
 const AI_TTS_API_BASE_URL = (config.AI_TTS_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
+const AI_TTS_PROVIDER = (config.AI_TTS_PROVIDER || '').toLowerCase();
+const IS_TTS_PUTER = AI_TTS_PROVIDER === 'puter' || AI_TTS_API_BASE_URL.toLowerCase() === 'puter';
 const AI_TTS_API_KEY = config.AI_TTS_API_KEY || AI_API_KEY;
 const IS_TTS_POLLINATIONS = AI_TTS_API_BASE_URL.includes('pollinations.ai');
-const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
-const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
+const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_PUTER ? config.PUTER_TTS_MODEL : IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
+const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_PUTER ? config.PUTER_TTS_VOICE || '' : IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
+const AI_STT_PROVIDER = (config.AI_STT_PROVIDER || '').toLowerCase();
+const IS_STT_PUTER = AI_STT_PROVIDER === 'puter' || IS_PUTER;
+const AI_STT_MODEL = config.AI_STT_MODEL || config.PUTER_STT_MODEL;
 const AI_EMBEDDING_API_BASE_URL = (config.AI_EMBEDDING_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
+const IS_EMBEDDING_PUTER = AI_EMBEDDING_API_BASE_URL.toLowerCase() === 'puter' || IS_PUTER;
 const IS_EMBEDDING_GEMINI = AI_EMBEDDING_API_BASE_URL.includes('generativelanguage.googleapis.com');
 const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || (IS_EMBEDDING_GEMINI ? config.AI_API_KEY : AI_API_KEY);
 const AI_EMBEDDING_MODEL = config.AI_EMBEDDING_MODEL;
@@ -46,6 +57,16 @@ const AI_EMBEDDING_ENDPOINT = config.AI_EMBEDDING_ENDPOINT || '/embeddings';
 const MAX_MEMORY_MESSAGES = 12;
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 const chatMemory = new Map<string, ChatMessage[]>();
+const puterAI = createPuterAIService({
+  authToken: config.PUTER_AUTH_TOKEN,
+  chatModel: AI_MODEL,
+  imageModel: AI_IMAGE_MODEL,
+  ttsModel: AI_TTS_MODEL,
+  ttsVoice: AI_TTS_VOICE,
+  sttModel: AI_STT_MODEL,
+  timeoutMs: config.PUTER_TIMEOUT_MS,
+  retries: config.PUTER_RETRIES,
+});
 
 function aiDebug(data: Record<string, unknown>, msg: string): void {
   if (config.AI_DEBUG) logger.info(data, `[ai] ${msg}`);
@@ -64,6 +85,14 @@ function aiFailureMessage(err: unknown): string {
 
   if (message.includes('HTTP 401')) {
     return 'AI provider authentication failed. Check your API key, base URL, and provider client support.';
+  }
+
+  if (message.includes('PUTER_AUTH_TOKEN_MISSING')) {
+    return 'Set PUTER_AUTH_TOKEN first to use Puter.js AI from the bot server.';
+  }
+
+  if (message.includes('PUTER_EMBEDDINGS_UNAVAILABLE')) {
+    return 'Puter.js does not currently expose a documented embeddings API, so embeddings are not available with the Puter provider yet.';
   }
 
   if (message.includes('HTTP 404') && message.includes('requested endpoint does not exist')) {
@@ -255,7 +284,102 @@ async function geminiChat(messages: ChatMessage[]) {
   };
 }
 
+function botToolDefinitions(): AIServiceTool[] {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'run_bot_command',
+        description: 'Run one existing WhatsApp bot command. Command output is sent directly to WhatsApp.',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Command name without prefix, for example menu or sbrat.' },
+            args: { type: 'array', items: { type: 'string' }, description: 'Command arguments.' },
+          },
+          required: ['command'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fetch_url',
+        description: 'Fetch a public HTTP/HTTPS URL for text, JSON, or a small direct media asset. Direct media is sent to WhatsApp.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+          },
+          required: ['url'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'generate_image',
+        description: 'Generate a new image from scratch with AI and send it to WhatsApp. Use this for image creation requests.',
+        parameters: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string', description: 'Detailed image prompt.' },
+            as_sticker: { type: 'boolean', description: 'Send the generated image as a WhatsApp sticker.' },
+          },
+          required: ['prompt'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'generate_audio',
+        description: 'Generate speech/voice audio from text and send it to WhatsApp.',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Text to speak.' },
+          },
+          required: ['text'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'embed_text',
+        description: 'Create an embedding vector for text. Use this only when the user asks for embeddings, vectors, or semantic similarity data.',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Text to embed.' },
+          },
+          required: ['text'],
+        },
+      },
+    },
+  ];
+}
+
 async function chat(messages: ChatMessage[], withTools = true) {
+  if (IS_PUTER) {
+    const result = await puterAI.chat(messages, {
+      model: AI_MODEL,
+      maxTokens: 800,
+      tools: withTools && config.AI_ENABLE_TOOLS ? botToolDefinitions() : undefined,
+      onProgress: (progress) => aiDebug(progress, 'puter progress'),
+    });
+
+    return {
+      choices: [
+        {
+          finish_reason: result.finishReason,
+          message: { content: result.text, tool_calls: result.toolCalls },
+        },
+      ],
+    };
+  }
+
   if (IS_GEMINI) {
     return geminiChat(messages);
   }
@@ -267,80 +391,7 @@ async function chat(messages: ChatMessage[], withTools = true) {
   };
 
   if (withTools && config.AI_ENABLE_TOOLS) {
-    body.tools = [
-      {
-        type: 'function',
-        function: {
-          name: 'run_bot_command',
-          description: 'Run one existing WhatsApp bot command. Command output is sent directly to WhatsApp.',
-          parameters: {
-            type: 'object',
-            properties: {
-              command: { type: 'string', description: 'Command name without prefix, for example menu or sbrat.' },
-              args: { type: 'array', items: { type: 'string' }, description: 'Command arguments.' },
-            },
-            required: ['command'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'fetch_url',
-          description: 'Fetch a public HTTP/HTTPS URL for text, JSON, or a small direct media asset. Direct media is sent to WhatsApp.',
-          parameters: {
-            type: 'object',
-            properties: {
-              url: { type: 'string' },
-            },
-            required: ['url'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'generate_image',
-          description: 'Generate a new image from scratch with AI and send it to WhatsApp. Use this for image creation requests.',
-          parameters: {
-            type: 'object',
-            properties: {
-              prompt: { type: 'string', description: 'Detailed image prompt.' },
-              as_sticker: { type: 'boolean', description: 'Send the generated image as a WhatsApp sticker.' },
-            },
-            required: ['prompt'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'generate_audio',
-          description: 'Generate speech/voice audio from text and send it to WhatsApp.',
-          parameters: {
-            type: 'object',
-            properties: {
-              text: { type: 'string', description: 'Text to speak.' },
-            },
-            required: ['text'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'embed_text',
-          description: 'Create an embedding vector for text. Use this only when the user asks for embeddings, vectors, or semantic similarity data.',
-          parameters: {
-            type: 'object',
-            properties: {
-              text: { type: 'string', description: 'Text to embed.' },
-            },
-            required: ['text'],
-          },
-        },
-      },
-    ];
+    body.tools = botToolDefinitions();
     body.tool_choice = 'auto';
     body.parallel_tool_calls = false;
   }
@@ -495,8 +546,62 @@ function embeddingInput(input: string): string | null {
   return null;
 }
 
+function speechToTextUrl(input: string): string | null {
+  const match = input.match(/\b(?:transcribe|speech\s*to\s*text|stt)\b[\s\S]*?(https?:\/\/\S+)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function imageAnalysisRequest(input: string): { url: string; prompt: string } | null {
+  const match = input.match(/\b(?:analy[sz]e|describe|ocr|read|what(?:'s| is) in)\b[\s\S]*?(https?:\/\/\S+)/i);
+  if (!match?.[1]) return null;
+
+  return {
+    url: match[1].trim(),
+    prompt: input.replace(match[1], '').trim() || 'Describe this image.',
+  };
+}
+
+async function transcribeAudio(input: string): Promise<string> {
+  if (!IS_STT_PUTER) {
+    return 'Speech-to-text is currently wired through Puter.js. Set AI_STT_PROVIDER=puter or AI_PROVIDER=puter first.';
+  }
+
+  const result = await puterAI.speechToText(input, {
+    model: AI_STT_MODEL,
+    language: config.AI_STT_LANGUAGE,
+    timeoutMs: config.AI_STT_TIMEOUT_MS,
+    onProgress: (progress) => aiDebug(progress, 'puter speech-to-text progress'),
+  });
+
+  return result.text ? `Transcription:\n${result.text}` : 'Puter did not return transcription text.';
+}
+
+async function analyzeImage(input: { url: string; prompt: string }): Promise<string> {
+  if (!IS_PUTER) {
+    return 'Image analysis is currently wired through Puter.js. Set AI_PROVIDER=puter first.';
+  }
+
+  const result = await puterAI.analyzeImage(input.url, {
+    prompt: input.prompt,
+    model: AI_MODEL,
+    onProgress: (progress) => aiDebug(progress, 'puter image analysis progress'),
+  });
+
+  return result.text || 'Puter did not return image analysis text.';
+}
+
 async function embedText(input: string): Promise<string> {
   aiDebug({ textLength: input.length, embeddingModel: AI_EMBEDDING_MODEL, endpoint: AI_EMBEDDING_ENDPOINT }, 'embedding requested');
+
+  if (IS_EMBEDDING_PUTER) {
+    const result = await puterAI.embedText(input);
+    const first = result.embeddings[0] || [];
+    const preview = first
+      .slice(0, 8)
+      .map((value) => value.toFixed(4))
+      .join(', ');
+    return `Embedding created.\nProvider: Puter\nDimensions: ${first.length}\nPreview: [${preview}${first.length > 8 ? ', ...' : ''}]`;
+  }
 
   if (!AI_EMBEDDING_MODEL) {
     return 'Set AI_EMBEDDING_MODEL first to use AI embeddings.';
@@ -542,15 +647,23 @@ async function embedText(input: string): Promise<string> {
 async function generateImage(ctx: BotContext, prompt: string, asSticker = false): Promise<string> {
   aiDebug({ prompt: snippet(prompt, 200), asSticker, imageModel: AI_IMAGE_MODEL, endpoint: AI_IMAGE_ENDPOINT }, 'image generation requested');
 
-  if (!AI_IMAGE_MODEL) {
+  if (!AI_IMAGE_MODEL && !IS_IMAGE_PUTER) {
     return 'Set AI_IMAGE_MODEL first to use AI image generation.';
   }
 
   let buffer: Buffer;
   let mimetype = 'image/png';
 
-  if (IS_IMAGE_POLLINATIONS) {
-    const params = new URLSearchParams({ model: AI_IMAGE_MODEL, width: '1024', height: '1024' });
+  if (IS_IMAGE_PUTER) {
+    await replyText(ctx, 'Generating image with Puter AI...');
+    const image = await puterAI.generateImage(prompt, {
+      model: AI_IMAGE_MODEL,
+      onProgress: (progress) => aiDebug(progress, 'puter image progress'),
+    });
+    buffer = image.buffer;
+    mimetype = image.mimeType.startsWith('image/') ? image.mimeType : mimetype;
+  } else if (IS_IMAGE_POLLINATIONS) {
+    const params = new URLSearchParams({ model: AI_IMAGE_MODEL || '', width: '1024', height: '1024' });
     const image = await fetchBinary(`https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?${params}`, 'image', AI_IMAGE_API_KEY);
     buffer = image.buffer;
     mimetype = image.contentType.startsWith('image/') ? image.contentType : mimetype;
@@ -647,16 +760,26 @@ async function generateImage(ctx: BotContext, prompt: string, asSticker = false)
 async function generateAudio(ctx: BotContext, input: string): Promise<string> {
   aiDebug({ textLength: input.length, ttsModel: AI_TTS_MODEL, voice: AI_TTS_VOICE }, 'audio generation requested');
 
-  if (!AI_TTS_MODEL) {
+  if (!AI_TTS_MODEL && !IS_TTS_PUTER) {
     return 'Set AI_TTS_MODEL first to use AI audio generation.';
   }
 
   const startedAt = Date.now();
-  const audio = IS_TTS_POLLINATIONS
-    ? await fetchBinary(
-      `https://gen.pollinations.ai/audio/${encodeURIComponent(input.slice(0, 4000))}?${new URLSearchParams({
+  const audio = IS_TTS_PUTER
+    ? await (async () => {
+      await replyText(ctx, 'Generating voice with Puter AI...');
+      const result = await puterAI.textToSpeech(input, {
         model: AI_TTS_MODEL,
         voice: AI_TTS_VOICE,
+        onProgress: (progress) => aiDebug(progress, 'puter text-to-speech progress'),
+      });
+      return { buffer: result.buffer, contentType: result.mimeType };
+    })()
+    : IS_TTS_POLLINATIONS
+    ? await fetchBinary(
+      `https://gen.pollinations.ai/audio/${encodeURIComponent(input.slice(0, 4000))}?${new URLSearchParams({
+        model: AI_TTS_MODEL || '',
+        voice: AI_TTS_VOICE || '',
       })}`,
       'audio',
       AI_TTS_API_KEY
@@ -816,9 +939,11 @@ export const AiCommand: Command = {
     aiDebug(
       {
         input: snippet(input, 300),
+        provider: IS_PUTER ? 'puter' : IS_GEMINI ? 'gemini' : IS_POLLINATIONS ? 'pollinations' : 'openai-compatible',
         chatModel: AI_MODEL,
         imageModel: AI_IMAGE_MODEL,
         ttsModel: AI_TTS_MODEL,
+        sttModel: AI_STT_MODEL,
         embeddingModel: AI_EMBEDDING_MODEL,
         baseUrl: AI_API_BASE_URL,
         toolsEnabled: config.AI_ENABLE_TOOLS,
@@ -856,6 +981,22 @@ export const AiCommand: Command = {
         return;
       }
 
+      const transcriptionUrl = speechToTextUrl(input);
+      if (transcriptionUrl) {
+        aiDebug({ url: transcriptionUrl }, 'direct speech-to-text shortcut');
+        await replyText(ctx, 'Transcribing audio with Puter AI...');
+        await replyText(ctx, await transcribeAudio(transcriptionUrl));
+        return;
+      }
+
+      const imageAnalysis = imageAnalysisRequest(input);
+      if (imageAnalysis) {
+        aiDebug({ url: imageAnalysis.url, prompt: snippet(imageAnalysis.prompt, 200) }, 'direct image analysis shortcut');
+        await replyText(ctx, 'Analyzing image with Puter AI...');
+        await replyText(ctx, await analyzeImage(imageAnalysis));
+        return;
+      }
+
       const textToEmbed = embeddingInput(input);
       if (textToEmbed) {
         aiDebug({ textLength: textToEmbed.length }, 'direct embedding shortcut');
@@ -863,7 +1004,7 @@ export const AiCommand: Command = {
         return;
       }
 
-      if (!AI_API_KEY && !IS_POLLINATIONS) {
+      if (!IS_PUTER && !AI_API_KEY && !IS_POLLINATIONS) {
         await replyText(ctx, 'Set AI_API_KEY first to use AI chat.');
         return;
       }
@@ -879,6 +1020,7 @@ export const AiCommand: Command = {
           role: 'system',
           content: `Your name is CrystalDust V0. You were made by your owner, CrystalDust, to live in WhatsApp and behave as a helpful assistant for all users. Answer briefly.
 You can generate text, create images, create voice audio, create embeddings, fetch public URLs, and run bot commands. Just like what a normal AI usually can do but you work on whatsapp and you've been given a bot commands capability.
+When Puter.js is enabled, you can also transcribe public audio URLs and analyze public image URLs when the user explicitly asks for it.
 Use generate_image for image creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio for voice/speech/audio generation. Use embed_text when the user asks for embeddings, vectors, or semantic similarity data. Use run_bot_command when an existing command fits the user's request, especially for menu, stickers, media conversion, downloader, search, fun, group, or utility tasks. Use fetch_url when the user asks you to inspect or send a public URL. Never run ai.
 If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} when a bot command should be used.
 ${IS_GEMINI ? 'Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}
@@ -892,6 +1034,10 @@ ${commandList()}`,
         ...(chatMemory.get(memoryKey(ctx)) || []),
         { role: 'user', content: input },
       ];
+
+      if (IS_PUTER) {
+        await replyText(ctx, 'Thinking with Puter AI...');
+      }
 
       let first = await chat(messages);
       let assistant = first?.choices?.[0]?.message;
