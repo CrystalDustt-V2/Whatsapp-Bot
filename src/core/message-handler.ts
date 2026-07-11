@@ -189,7 +189,7 @@ export class MessageHandler {
         return;
       }
 
-      recordRecoverableMessage(message, sender, text, timestamp);
+      await recordRecoverableMessage(message, sender, text, timestamp);
 
       if (!text.startsWith(config.BOT_PREFIX)) {
         logger.debug(
