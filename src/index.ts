@@ -61,7 +61,18 @@ async function main() {
 
       socket.ev.on('messages.upsert', async (m) => {
         const messages = m.messages;
-        if (!messages || m.type !== 'notify') return;
+        if (!messages) return;
+
+        if (config.DELETED_MESSAGE_DEBUG) {
+          logger.info(
+            {
+              type: m.type,
+              count: messages.length,
+              messageTypes: messages.map((msg) => Object.keys(msg.message || {})[0] || 'none'),
+            },
+            'Received message upsert batch'
+          );
+        }
 
         for (const msg of messages) {
           const fromMe = Boolean(msg.key.fromMe);

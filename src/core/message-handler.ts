@@ -251,8 +251,28 @@ export class MessageHandler {
       const key = update.update.key || update.key;
       const timestampSeconds = Math.floor(Date.now() / 1000);
       const deletedBy = getSenderIdentity({ key, messageTimestamp: timestampSeconds } as WAMessage, this.socket);
+      if (config.DELETED_MESSAGE_DEBUG) {
+        logger.info(
+          {
+            remoteJid: key.remoteJid,
+            messageId: key.id,
+            updateKeys: Object.keys(update.update),
+            messageType: update.update.message ? Object.keys(update.update.message)[0] || 'unknown' : 'none',
+          },
+          'Received message update for deleted-message recovery'
+        );
+      }
+
       const recovered = recordDeletedMessageFromUpdate(update, deletedBy, timestampSeconds);
-      if (!recovered) return;
+      if (!recovered) {
+        if (config.DELETED_MESSAGE_DEBUG) {
+          logger.info(
+            { remoteJid: key.remoteJid, messageId: key.id },
+            'Message update was not a recoverable delete'
+          );
+        }
+        return;
+      }
 
       logger.info(
         {
@@ -269,7 +289,19 @@ export class MessageHandler {
   }
 
   async handleMessageDelete(update: { keys: WAMessageKey[] } | { jid: string; all: true }): Promise<void> {
-    if ('all' in update) return;
+    if ('all' in update) {
+      if (config.DELETED_MESSAGE_DEBUG) {
+        logger.info({ jid: update.jid }, 'Received all-messages delete event');
+      }
+      return;
+    }
+
+    if (config.DELETED_MESSAGE_DEBUG) {
+      logger.info(
+        { count: update.keys.length, keys: update.keys.map((key) => ({ remoteJid: key.remoteJid, id: key.id })) },
+        'Received message delete event'
+      );
+    }
 
     for (const key of update.keys) {
       try {

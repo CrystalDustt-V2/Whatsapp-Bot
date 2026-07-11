@@ -55,6 +55,7 @@ const ConfigSchema = z.object({
   DELETED_MESSAGE_MAX_MESSAGES: z.string().transform(Number).default('500'),
   DELETED_MESSAGE_MAX_DELETED: z.string().transform(Number).default('100'),
   DELETED_MESSAGE_MAX_TEXT_CHARS: z.string().transform(Number).default('4000'),
+  DELETED_MESSAGE_DEBUG: z.string().transform((value) => value === 'true').default('false'),
   DELETED_MESSAGE_MEDIA_ENABLED: z.string().transform((value) => value !== 'false').default('true'),
   DELETED_MESSAGE_MEDIA_DIR: z.string().optional(),
   DELETED_MESSAGE_MEDIA_MAX_MB: z.string().transform(Number).default('25'),

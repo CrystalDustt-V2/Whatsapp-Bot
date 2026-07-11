@@ -417,6 +417,20 @@ export async function recordRecoverableMessage(
     logger.warn({ err, messageId: id, chatJid }, 'Could not cache deleted-message media');
   }
 
+  if (config.DELETED_MESSAGE_DEBUG) {
+    logger.info(
+      {
+        chatJid,
+        messageId: id,
+        messageType: type,
+        mediaKind: media?.kind,
+        mediaStorage: media?.storage,
+        mediaSize: media?.size,
+      },
+      media ? 'Cached recoverable message media' : 'Cached recoverable message metadata'
+    );
+  }
+
   const next: RecoverableMessage = {
     chatJid,
     messageId: id,
