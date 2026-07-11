@@ -86,6 +86,10 @@ async function main() {
           await messageHandler.handleMessageUpdate(update);
         }
       });
+
+      socket.ev.on('messages.delete', async (update) => {
+        await messageHandler.handleMessageDelete(update);
+      });
     },
     async onDisconnected() {
       apiServer.clearBotSocket();

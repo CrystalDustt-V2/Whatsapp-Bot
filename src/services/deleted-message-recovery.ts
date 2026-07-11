@@ -476,6 +476,11 @@ export function recordDeletedMessageFromUpdate(
   deletedBy: SenderIdentity,
   timestampSeconds: number
 ): DeletedMessageRecord | null {
+  const protocolMessage = update.update.message?.protocolMessage;
+  if (protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+    return recordDeletedMessageByKey(protocolMessage.key, deletedBy, timestampSeconds);
+  }
+
   const isRevoke =
     (update.update.message === null && Boolean(update.update.key)) ||
     update.update.messageStubType === proto.WebMessageInfo.StubType.REVOKE;

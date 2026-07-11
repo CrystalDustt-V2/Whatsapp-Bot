@@ -1,10 +1,11 @@
-import type { WASocket, WAMessage, WAMessageUpdate, proto } from '@whiskeysockets/baileys';
+import type { WASocket, WAMessage, WAMessageKey, WAMessageUpdate, proto } from '@whiskeysockets/baileys';
 import logger from './logger';
 import config from '../config';
 import { commandRegistry } from './command-registry';
 import type { BotContext } from '../types';
 import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
 import {
+  recordDeletedMessageByKey,
   recordDeletedMessageFromProtocol,
   recordDeletedMessageFromUpdate,
   recordRecoverableMessage,
@@ -264,6 +265,37 @@ export class MessageHandler {
       );
     } catch (err) {
       logger.warn({ err }, 'Could not process deleted message update');
+    }
+  }
+
+  async handleMessageDelete(update: { keys: WAMessageKey[] } | { jid: string; all: true }): Promise<void> {
+    if ('all' in update) return;
+
+    for (const key of update.keys) {
+      try {
+        const timestampSeconds = Math.floor(Date.now() / 1000);
+        const deletedBy = getSenderIdentity({ key, messageTimestamp: timestampSeconds } as WAMessage, this.socket);
+        const recovered = recordDeletedMessageByKey(key, deletedBy, timestampSeconds);
+        if (!recovered) {
+          logger.info(
+            { remoteJid: key.remoteJid, messageId: key.id },
+            'Deleted message event had no cached recoverable message'
+          );
+          continue;
+        }
+
+        logger.info(
+          {
+            remoteJid: recovered.chatJid,
+            messageId: recovered.messageId,
+            sender: recovered.senderName,
+            deletedBy: recovered.deletedByName,
+          },
+          'Recovered deleted message metadata'
+        );
+      } catch (err) {
+        logger.warn({ err, remoteJid: key.remoteJid, messageId: key.id }, 'Could not process deleted message event');
+      }
     }
   }
 }
