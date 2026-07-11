@@ -20,7 +20,7 @@ type RecoverableMessage = {
 };
 
 type RecoverableMediaRecord = {
-  kind: 'audio' | 'video';
+  kind: 'audio' | 'video' | 'image';
   mimetype: string;
   extension: string;
   fileName: string;
@@ -275,17 +275,21 @@ function messageText(message: proto.IMessage | null | undefined, fallback = ''):
   );
 }
 
-function recoverableMedia(message: proto.IMessage | null | undefined): { kind: 'audio' | 'video'; media: proto.Message.IAudioMessage | proto.Message.IVideoMessage } | null {
+function recoverableMedia(
+  message: proto.IMessage | null | undefined
+): { kind: 'audio' | 'video' | 'image'; media: proto.Message.IAudioMessage | proto.Message.IVideoMessage | proto.Message.IImageMessage } | null {
   const unwrapped = unwrapMessage(message);
   if (!unwrapped) return null;
   if (unwrapped.audioMessage) return { kind: 'audio', media: unwrapped.audioMessage };
   if (unwrapped.videoMessage) return { kind: 'video', media: unwrapped.videoMessage };
+  if (unwrapped.imageMessage) return { kind: 'image', media: unwrapped.imageMessage };
   return null;
 }
 
-function extensionFromMedia(kind: 'audio' | 'video', mimetype: string): string {
+function extensionFromMedia(kind: 'audio' | 'video' | 'image', mimetype: string): string {
   const extension = mimetype.split('/')[1]?.split(';')[0]?.toLowerCase();
   if (extension) return extension === 'mpeg' ? 'mp3' : extension === 'quicktime' ? 'mov' : extension;
+  if (kind === 'image') return 'jpg';
   return kind === 'audio' ? 'ogg' : 'mp4';
 }
 
@@ -350,7 +354,7 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
 
   return storeMediaBuffer({
     kind: found.kind,
-    mimetype: mimetype || (found.kind === 'audio' ? 'audio/ogg' : 'video/mp4'),
+    mimetype: mimetype || (found.kind === 'audio' ? 'audio/ogg' : found.kind === 'video' ? 'video/mp4' : 'image/jpeg'),
     extension,
     fileName,
     size: buffer.length,

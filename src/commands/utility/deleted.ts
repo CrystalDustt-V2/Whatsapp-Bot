@@ -88,6 +88,14 @@ export const DeletedMessageCommand: Command = {
       return;
     }
 
+    if (record.media.kind === 'image') {
+      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+        image: buffer,
+        mimetype: record.media.mimetype || 'image/jpeg',
+      });
+      return;
+    }
+
     await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
       audio: buffer,
       mimetype: record.media.mimetype || 'audio/ogg',
