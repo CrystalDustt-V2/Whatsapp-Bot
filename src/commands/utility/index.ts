@@ -28,6 +28,14 @@ export {
   TextCaseCommand as textcase,
   WordCountCommand as wordcount,
   CodeSnippetCommand as codesnippet,
+  UuidCommand as uuid,
+  HashCommand as hash,
+  JsonCommand as json,
+  TimestampCommand as timestamp,
+  SortLinesCommand as sortlines,
+  DedupeLinesCommand as dedupe,
+  ExtractUrlsCommand as extracturls,
+  Rot13Command as rot13,
 } from './text-extra';
 export {
   IpLookupCommand as iplookup,

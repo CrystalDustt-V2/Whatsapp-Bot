@@ -61,6 +61,14 @@ import {
   textcase,
   wordcount,
   codesnippet,
+  uuid,
+  hash,
+  json,
+  timestamp,
+  sortlines,
+  dedupe,
+  extracturls,
+  rot13,
   iplookup,
   dns,
   httpcheck,
@@ -213,6 +221,14 @@ export function loadCommands(): void {
   commandRegistry.register(textcase);
   commandRegistry.register(wordcount);
   commandRegistry.register(codesnippet);
+  commandRegistry.register(uuid);
+  commandRegistry.register(hash);
+  commandRegistry.register(json);
+  commandRegistry.register(timestamp);
+  commandRegistry.register(sortlines);
+  commandRegistry.register(dedupe);
+  commandRegistry.register(extracturls);
+  commandRegistry.register(rot13);
   commandRegistry.register(iplookup);
   commandRegistry.register(dns);
   commandRegistry.register(httpcheck);
