@@ -9,9 +9,10 @@ const BACKGROUNDS = {
 } as const;
 const GREEN_INPUT_LENGTH = 20;
 const WHITE_INPUT_LENGTH = 160;
-const MAX_FONT_SIZE = 75;
-const MIN_FONT_SIZE = 18;
-const MAX_TEXT_WIDTH = CANVAS_SIZE - 24;
+const MAX_FONT_SIZE = 170;
+const MIN_FONT_SIZE = 8;
+const TEXT_PADDING = 20;
+const MAX_TEXT_WIDTH = CANVAS_SIZE - TEXT_PADDING * 2;
 
 type BratBackground = keyof typeof BACKGROUNDS;
 
@@ -29,7 +30,7 @@ function normalizeText(value: string, background: BratBackground): string {
 }
 
 function textWidth(text: string, fontSize: number): number {
-  return Array.from(text).reduce((width, char) => width + fontSize * (/[\s]/.test(char) ? 0.26 : /[il.,'`]/i.test(char) ? 0.24 : 0.48), 0);
+  return Array.from(text).reduce((width, char) => width + fontSize * (/[\s]/.test(char) ? 0.28 : /[il.,'`]/i.test(char) ? 0.3 : 0.55), 0);
 }
 
 function fontSizeFor(text: string): number {
@@ -54,7 +55,7 @@ async function createSbratSticker(text: string, background: BratBackground): Pro
   const svg = Buffer.from(`
     <svg width="${CANVAS_SIZE}" height="${CANVAS_SIZE}" viewBox="0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="${BACKGROUNDS[background]}"/>
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
+      <text x="${TEXT_PADDING}" y="50%" text-anchor="start" dominant-baseline="central"
         font-family="Arial Narrow, Arial, Helvetica, sans-serif"
         font-size="${fontSize}" font-weight="500" fill="#000000"
         filter="url(#softBlur)">${escapeXml(text)}</text>
