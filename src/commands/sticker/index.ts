@@ -6,6 +6,7 @@ export { GlitchStickerCommand as glitchsticker } from './glitchsticker';
 export {
   MemeStickerCommand as memesticker,
   QuoteStickerCommand as quotesticker,
+  StickerTextCommand as stext,
 } from './meme';
 export { StickerImageCommand as stickerimage } from './convert';
 export {

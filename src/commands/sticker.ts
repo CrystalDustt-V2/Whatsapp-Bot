@@ -56,7 +56,7 @@ export const StickerCommand: Command = {
         } else if (shapeArg === 'rounded') {
           processedBuffer = await stickerEngine.createShapedSticker(buffer, 'rounded', { packName: pack, author });
         } else {
-          processedBuffer = await stickerEngine.createSticker(buffer, { packName: pack, author });
+          processedBuffer = await stickerEngine.createSticker(buffer, { packName: pack, author, smartCrop: true });
         }
       } else {
         processedBuffer = buffer;

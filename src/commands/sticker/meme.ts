@@ -55,6 +55,24 @@ function memeOverlay(top: string, bottom: string): Buffer {
   `);
 }
 
+function stickerTextOverlay(position: 'top' | 'bottom', value: string): Buffer {
+  const lines = wrapText(value, 18, 3);
+  const fontSize = lines.length > 2 ? 38 : lines.length > 1 ? 44 : 52;
+  const startY = position === 'top' ? 52 : 462 - (lines.length - 1) * fontSize * 1.12;
+  const text = lines
+    .map((line, index) => `<tspan x="256" y="${startY + index * fontSize * 1.12}">${escapeXml(line.toUpperCase())}</tspan>`)
+    .join('');
+
+  return Buffer.from(`
+    <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        text { font-family: Impact, "Arial Black", sans-serif; font-size: ${fontSize}px; font-weight: 900; fill: white; stroke: black; stroke-width: 7px; paint-order: stroke; text-anchor: middle; dominant-baseline: middle; }
+      </style>
+      <text>${text}</text>
+    </svg>
+  `);
+}
+
 async function makeQuoteSticker(author: string, quote: string): Promise<Buffer> {
   const quoteLines = wrapText(quote, 26, 7);
   const fontSize = quoteLines.length > 4 ? 28 : 34;
@@ -111,6 +129,42 @@ export const MemeStickerCommand: Command = {
       });
     } catch (err) {
       await ctx.reply('Failed to create meme sticker.');
+    }
+  },
+};
+
+export const StickerTextCommand: Command = {
+  name: 'stext',
+  aliases: ['stickertext', 'textsticker'],
+  category: CommandCategory.STICKER,
+  description: 'Add top or bottom text to a replied sticker',
+  usage: 'stext top|bottom <text>',
+  async execute(ctx) {
+    const match = (ctx.rawArgs || ctx.args.join(' ')).trim().match(/^(top|bottom)\s+([\s\S]+)$/i);
+    if (!match) {
+      await ctx.reply('Usage: .stext top|bottom <text>');
+      return;
+    }
+
+    try {
+      const media = await downloadMediaFromContext(ctx, ['sticker']);
+      if (!media) {
+        await ctx.reply('Please reply to a sticker with .stext top|bottom <text>');
+        return;
+      }
+
+      const sticker = await sharp(media.buffer, { animated: false })
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .composite([{ input: stickerTextOverlay(match[1].toLowerCase() as 'top' | 'bottom', match[2]) }])
+        .webp({ quality: 90 })
+        .toBuffer();
+
+      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+        sticker,
+        mimetype: 'image/webp',
+      });
+    } catch {
+      await ctx.reply('Failed to add text to that sticker.');
     }
   },
 };

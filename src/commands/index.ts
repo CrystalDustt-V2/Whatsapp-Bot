@@ -138,6 +138,7 @@ import { GlitchStickerCommand as glitchsticker } from './sticker/glitchsticker';
 import {
   MemeStickerCommand as memesticker,
   QuoteStickerCommand as quotesticker,
+  StickerTextCommand as stext,
 } from './sticker/meme';
 import { StickerImageCommand as stickerimage } from './sticker/convert';
 import {
@@ -292,6 +293,7 @@ export function loadCommands(): void {
   commandRegistry.register(glitchsticker);
   commandRegistry.register(memesticker);
   commandRegistry.register(quotesticker);
+  commandRegistry.register(stext);
   commandRegistry.register(stickerimage);
   commandRegistry.register(circlesticker);
   commandRegistry.register(roundedsticker);

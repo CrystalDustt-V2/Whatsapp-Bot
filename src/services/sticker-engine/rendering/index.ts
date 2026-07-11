@@ -9,12 +9,18 @@ export class StickerRenderer {
     const width = options.width || 512;
     const height = options.height || 512;
     const quality = options.quality || 100;
+    const resizeOptions: sharp.ResizeOptions = options.smartCrop
+      ? {
+          fit: 'cover',
+          position: sharp.strategy.attention,
+        }
+      : {
+          fit: 'contain',
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        };
 
     return sharp(buffer)
-      .resize(width, height, {
-        fit: 'contain',
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
-      })
+      .resize(width, height, resizeOptions)
       .webp({ quality })
       .toBuffer();
   }

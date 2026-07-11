@@ -4,6 +4,7 @@ export interface StickerOptions {
   width?: number;
   height?: number;
   quality?: number;
+  smartCrop?: boolean;
 }
 
 export interface TextOptions {
