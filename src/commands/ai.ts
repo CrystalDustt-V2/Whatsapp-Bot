@@ -315,7 +315,7 @@ function botToolDefinitions(): AIServiceTool[] {
       type: 'function',
       function: {
         name: 'generate_image',
-        description: 'Generate a new image from scratch with AI and send it to WhatsApp. Use this for image creation requests.',
+        description: 'Generate a new image/sticker/visual from scratch and send it to WhatsApp. Use only when the user explicitly asks for an image, drawing, picture, sticker, logo, illustration, or visual generation.',
         parameters: {
           type: 'object',
           properties: {
@@ -330,7 +330,7 @@ function botToolDefinitions(): AIServiceTool[] {
       type: 'function',
       function: {
         name: 'generate_audio',
-        description: 'Generate speech/voice audio from text and send it to WhatsApp.',
+        description: 'Generate speech/voice/audio from text and send it to WhatsApp. Use only when the user explicitly asks for audio, speech, voice, TTS, or sound.',
         parameters: {
           type: 'object',
           properties: {
@@ -517,8 +517,14 @@ function parseXmlToolCall(text: string): ToolCall | null {
 function promptFor(kind: 'image' | 'audio', input: string): string | null {
   const patterns =
     kind === 'image'
-      ? [/^(?:image|draw|generate image|create image|make image)\s*:?\s*(.+)$/i, /\b(?:generate|create|make|draw)\b[\s\S]*?\bimage\b(?:\s+(?:of|about)\s+)?([\s\S]+)?$/i]
-      : [/^(?:audio|voice|tts|say)\s*:?\s*(.+)$/i, /\b(?:generate|create|make)\b[\s\S]*?\b(?:audio|voice|speech)\b(?:\s+(?:of|saying|about)\s+)?([\s\S]+)?$/i];
+      ? [
+          /^(?:image|picture|photo|drawing|draw|sticker|logo|illustration|visual)\s*:?\s*(.+)$/i,
+          /\b(?:generate|create|make|draw|design)\b[\s\S]*?\b(?:image|picture|photo|drawing|sticker|logo|illustration|visual|artwork)\b(?:\s+(?:of|for|about)\s+)?([\s\S]+)?$/i,
+        ]
+      : [
+          /^(?:audio|voice|speech|tts|sound)\s*:?\s*(.+)$/i,
+          /\b(?:generate|create|make)\b[\s\S]*?\b(?:audio|voice|speech|tts|sound)\b(?:\s+(?:of|saying|that says|about)\s+)?([\s\S]+)?$/i,
+        ];
 
   for (const pattern of patterns) {
     const match = input.match(pattern);
@@ -526,6 +532,28 @@ function promptFor(kind: 'image' | 'audio', input: string): string | null {
   }
 
   return null;
+}
+
+function explicitCommandToolRequest(input: string): boolean {
+  if (parseCommandRequest(input)) return true;
+  if (!/\b(?:bot command|command|run|use|call|execute)\b/i.test(input)) return false;
+
+  const lower = input.toLowerCase();
+  return commandRegistry.getAll().some((command) =>
+    [command.name, ...(command.aliases || [])].some((name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(lower))
+  );
+}
+
+export function aiToolAllowedForInput(input: string, toolName: string): boolean {
+  return toolName === 'generate_image'
+    ? Boolean(promptFor('image', input))
+    : toolName === 'generate_audio'
+      ? Boolean(promptFor('audio', input))
+      : toolName === 'embed_text'
+        ? Boolean(embeddingInput(input))
+        : toolName === 'run_bot_command'
+          ? explicitCommandToolRequest(input)
+          : true;
 }
 
 function embeddingInput(input: string): string | null {
@@ -908,8 +936,12 @@ async function fetchUrl(ctx: BotContext, toolCall: ToolCall): Promise<string> {
   return `Fetched and sent file: ${fileName}`;
 }
 
-async function runTool(ctx: BotContext, toolCall: ToolCall): Promise<string> {
+async function runTool(ctx: BotContext, toolCall: ToolCall, userInput: string): Promise<string> {
   aiDebug({ tool: toolCall.function.name, arguments: snippet(toolCall.function.arguments || '', 500) }, 'running tool');
+
+  if (!aiToolAllowedForInput(userInput, toolCall.function.name)) {
+    return 'Refused: the user did not explicitly ask for this kind of output. Answer in plain text or ask a short clarification.';
+  }
 
   return toolCall.function.name === 'run_bot_command'
     ? runBotCommand(ctx, toolCall)
@@ -1014,11 +1046,13 @@ export const AiCommand: Command = {
       const messages: ChatMessage[] = [
         {
           role: 'system',
-          content: `Your name is CrystalDust V0. You were made by your owner, CrystalDust, to live in WhatsApp and behave as a helpful assistant for all users. Answer briefly.
-You can generate text, create images, create voice audio, create embeddings, fetch public URLs, and run bot commands. Just like what a normal AI usually can do but you work on whatsapp and you've been given a bot commands capability.
-When Puter.js is enabled, you can also transcribe public audio URLs and analyze public image URLs when the user explicitly asks for it.
-Use generate_image for image creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio for voice/speech/audio generation. Use embed_text when the user asks for embeddings, vectors, or semantic similarity data. Use run_bot_command when an existing command fits the user's request, especially for menu, stickers, media conversion, downloader, search, fun, group, or utility tasks. Use fetch_url when the user asks you to inspect or send a public URL. Never run ai.
-If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} when a bot command should be used.
+          content: `You are CrystalDust V0, a helpful WhatsApp assistant made by CrystalDust. Default to concise text replies.
+Do not generate images, stickers, audio, voice, embeddings, or run bot commands unless the user explicitly asks for that exact kind of output. Simple questions, greetings, explanations, opinions, jokes, recommendations, and normal chat must be answered as plain text only.
+Use generate_image only for explicit image, drawing, picture, sticker, logo, illustration, or visual creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio only for explicit audio, speech, voice, TTS, or sound requests. Use embed_text only for explicit embedding, vector, or semantic similarity requests. Use run_bot_command only when an existing bot command clearly matches the user's requested bot action. Use fetch_url when the user asks you to inspect or send a public URL. If unsure, ask a short text clarification. Never run ai.
+Do not select image or audio output just because the selected model supports it; modality must come from the user's explicit request.
+When Puter.js is enabled, you can transcribe public audio URLs and analyze public image URLs only when the user explicitly asks for it.
+If the user asks who you are, says hello, asks an opinion, or asks a normal question, reply in text only.
+If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} only when a bot command should be used.
 ${IS_GEMINI ? 'Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}
 Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.
 Use saved chat memory only as background context, and do not claim certainty when the memory is incomplete.
@@ -1059,7 +1093,7 @@ ${commandList()}`,
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: await runTool(ctx, toolCall),
+            content: await runTool(ctx, toolCall, input),
           });
         }
 
@@ -1073,6 +1107,10 @@ ${commandList()}`,
 
       const directive = parseCommandDirective(assistantText);
       if (directive) {
+        if (!aiToolAllowedForInput(input, 'run_bot_command')) {
+          await replyText(ctx, 'Which bot command or action do you want me to run?');
+          return;
+        }
         aiDebug(directive, 'fallback command directive');
         const result = await runCommand(ctx, directive.command, directive.args);
         remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: result });
@@ -1082,13 +1120,13 @@ ${commandList()}`,
       const xmlToolCall = parseXmlToolCall(assistantText);
       if (xmlToolCall) {
         aiDebug({ tool: xmlToolCall.function.name }, 'fallback xml tool call');
-        const result = await runTool(ctx, xmlToolCall);
+        const result = await runTool(ctx, xmlToolCall, input);
         remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: result });
         return;
       }
 
       const imageUrl = parseMarkdownImage(assistantText);
-      if (imageUrl) {
+      if (imageUrl && aiToolAllowedForInput(input, 'generate_image')) {
         aiDebug({ imageUrl }, 'markdown image fallback');
         await fetchUrl(ctx, {
           id: 'markdown-image',
