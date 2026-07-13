@@ -140,7 +140,7 @@ import {
   QuoteStickerCommand as quotesticker,
   StickerTextCommand as stext,
 } from './sticker/meme';
-import { StickerImageCommand as stickerimage } from './sticker/convert';
+import { StickerRevertCommand as srevert } from './sticker/convert';
 import {
   BorderStickerCommand as bordersticker,
   CircleStickerCommand as circlesticker,
@@ -294,7 +294,7 @@ export function loadCommands(): void {
   commandRegistry.register(memesticker);
   commandRegistry.register(quotesticker);
   commandRegistry.register(stext);
-  commandRegistry.register(stickerimage);
+  commandRegistry.register(srevert);
   commandRegistry.register(circlesticker);
   commandRegistry.register(roundedsticker);
   commandRegistry.register(bordersticker);

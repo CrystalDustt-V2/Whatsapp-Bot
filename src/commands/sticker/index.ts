@@ -8,7 +8,7 @@ export {
   QuoteStickerCommand as quotesticker,
   StickerTextCommand as stext,
 } from './meme';
-export { StickerImageCommand as stickerimage } from './convert';
+export { StickerRevertCommand as srevert } from './convert';
 export {
   BorderStickerCommand as bordersticker,
   CircleStickerCommand as circlesticker,

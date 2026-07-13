@@ -2,20 +2,31 @@ import sharp from 'sharp';
 import { Command, CommandCategory } from '../../types';
 import { downloadMediaFromContext } from '../media/helpers';
 
-export const StickerImageCommand: Command = {
-  name: 'stickerimage',
-  aliases: ['stickertoimg', 'stickerpng', 'stimg'],
+export const StickerRevertCommand: Command = {
+  name: 'srevert',
+  aliases: ['stickerimage', 'stickertoimg', 'stickerpng', 'stimg', 'stickertogif', 'stgif'],
   category: CommandCategory.STICKER,
-  description: 'Convert a sticker to a PNG image',
-  usage: 'stickerimage',
+  description: 'Convert a sticker back to PNG or GIF',
+  usage: 'srevert',
   async execute(ctx) {
-    const media = await downloadMediaFromContext(ctx, ['sticker', 'image', 'document']);
+    const media = await downloadMediaFromContext(ctx, ['sticker']);
     if (!media) {
-      await ctx.reply('Please reply to a sticker with .stickerimage');
+      await ctx.reply('Please reply to a sticker with .srevert');
       return;
     }
 
     try {
+      const metadata = await sharp(media.buffer, { animated: true }).metadata();
+      if ((metadata.pages || 1) > 1) {
+        const gif = await sharp(media.buffer, { animated: true }).gif().toBuffer();
+        await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+          document: gif,
+          mimetype: 'image/gif',
+          fileName: 'sticker.gif',
+        });
+        return;
+      }
+
       const image = await sharp(media.buffer).png().toBuffer();
       await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
         image,
@@ -23,7 +34,7 @@ export const StickerImageCommand: Command = {
         caption: 'Sticker converted to image.',
       });
     } catch (err) {
-      await ctx.reply('Failed to convert this sticker to an image.');
+      await ctx.reply('Failed to revert this sticker.');
     }
   },
 };

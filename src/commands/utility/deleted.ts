@@ -14,7 +14,7 @@ function preview(value: string, max = 80): string {
 
 function formatRecord(record: DeletedMessageRecord, index: number): string {
   const mediaLine = record.media
-    ? `Media: saved ${record.media.kind} (${formatBytes(record.media.size)})\n`
+    ? `Media: saved ${record.media.viewOnce ? 'view-once ' : ''}${record.media.kind} (${formatBytes(record.media.size)})\n`
     : '';
 
   return (
@@ -31,7 +31,7 @@ function formatRecord(record: DeletedMessageRecord, index: number): string {
 
 function formatList(records: DeletedMessageRecord[]): string {
   const lines = records.map((record, index) => {
-    const media = record.media ? ` [${record.media.kind}]` : '';
+    const media = record.media ? ` [${record.media.viewOnce ? 'view-once ' : ''}${record.media.kind}]` : '';
     return `${index + 1}. ${record.senderName}${media} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
   });
 

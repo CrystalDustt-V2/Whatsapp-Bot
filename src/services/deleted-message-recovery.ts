@@ -16,6 +16,7 @@ type RecoverableMessage = {
   messageType: string;
   text: string;
   media?: RecoverableMediaRecord;
+  viewOnce?: boolean;
   timestamp: string;
 };
 
@@ -29,6 +30,7 @@ type RecoverableMediaRecord = {
   megaNodeId?: string;
   size: number;
   ptt?: boolean;
+  viewOnce?: boolean;
 };
 
 export type DeletedMessageRecord = RecoverableMessage & {
@@ -242,23 +244,44 @@ function messageId(message: WAMessage): string | null {
   return messageIdFromKey(message.key);
 }
 
-function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
-  if (!message) return null;
+function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
+  if (!message) return { message: null, viewOnce: false };
+  if (depth > 8) return { message, viewOnce: false };
 
-  return (
+  const viewOnceMessage =
     message.viewOnceMessage?.message ||
     message.viewOnceMessageV2?.message ||
-    message.viewOnceMessageV2Extension?.message ||
+    message.viewOnceMessageV2Extension?.message;
+  if (viewOnceMessage) {
+    const inner = unwrapMessageInfo(viewOnceMessage, depth + 1);
+    return { message: inner.message, viewOnce: true };
+  }
+
+  const wrappedMessage =
     message.ephemeralMessage?.message ||
     message.documentWithCaptionMessage?.message ||
-    message.editedMessage?.message ||
-    message
-  );
+    message.editedMessage?.message;
+  if (wrappedMessage) return unwrapMessageInfo(wrappedMessage, depth + 1);
+
+  return { message, viewOnce: false };
+}
+
+function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
+  return unwrapMessageInfo(message).message;
+}
+
+function displayType(type: string): string {
+  return type
+    .replace(/^viewOnce:/, 'view once ')
+    .replace(/Message$/, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase();
 }
 
 function messageType(message: proto.IMessage | null | undefined): string {
-  const unwrapped = unwrapMessage(message);
-  return unwrapped ? Object.keys(unwrapped)[0] || 'unknown' : 'unknown';
+  const unwrapped = unwrapMessageInfo(message);
+  const type = unwrapped.message ? Object.keys(unwrapped.message)[0] || 'unknown' : 'unknown';
+  return unwrapped.viewOnce ? `viewOnce:${type}` : type;
 }
 
 function messageText(message: proto.IMessage | null | undefined, fallback = ''): string {
@@ -275,14 +298,16 @@ function messageText(message: proto.IMessage | null | undefined, fallback = ''):
   );
 }
 
-function recoverableMedia(
-  message: proto.IMessage | null | undefined
-): { kind: 'audio' | 'video' | 'image'; media: proto.Message.IAudioMessage | proto.Message.IVideoMessage | proto.Message.IImageMessage } | null {
-  const unwrapped = unwrapMessage(message);
-  if (!unwrapped) return null;
-  if (unwrapped.audioMessage) return { kind: 'audio', media: unwrapped.audioMessage };
-  if (unwrapped.videoMessage) return { kind: 'video', media: unwrapped.videoMessage };
-  if (unwrapped.imageMessage) return { kind: 'image', media: unwrapped.imageMessage };
+function recoverableMedia(message: proto.IMessage | null | undefined): {
+  kind: 'audio' | 'video' | 'image';
+  media: proto.Message.IAudioMessage | proto.Message.IVideoMessage | proto.Message.IImageMessage;
+  viewOnce: boolean;
+} | null {
+  const unwrapped = unwrapMessageInfo(message);
+  if (!unwrapped.message) return null;
+  if (unwrapped.message.audioMessage) return { kind: 'audio', media: unwrapped.message.audioMessage, viewOnce: unwrapped.viewOnce };
+  if (unwrapped.message.videoMessage) return { kind: 'video', media: unwrapped.message.videoMessage, viewOnce: unwrapped.viewOnce };
+  if (unwrapped.message.imageMessage) return { kind: 'image', media: unwrapped.message.imageMessage, viewOnce: unwrapped.viewOnce };
   return null;
 }
 
@@ -325,7 +350,20 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
   if (!config.DELETED_MESSAGE_MEDIA_ENABLED) return undefined;
 
   const found = recoverableMedia(message.message);
-  if (!found) return undefined;
+  if (!found) {
+    const unwrapped = unwrapMessageInfo(message.message);
+    if (config.DELETED_MESSAGE_DEBUG && unwrapped.viewOnce) {
+      logger.info(
+        {
+          messageId: message.key.id,
+          chatJid: message.key.remoteJid,
+          innerTypes: unwrapped.message ? Object.keys(unwrapped.message) : [],
+        },
+        'View-once message had no recoverable media payload'
+      );
+    }
+    return undefined;
+  }
 
   const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
   const chunks: Buffer[] = [];
@@ -359,13 +397,14 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
     fileName,
     size: buffer.length,
     ptt: found.kind === 'audio' ? Boolean((found.media as proto.Message.IAudioMessage).ptt) : undefined,
+    viewOnce: found.viewOnce || undefined,
   }, buffer);
 }
 
 function displayText(text: string, type: string): string {
   const trimmed = text.trim();
   if (trimmed) return trimmed.slice(0, maxTextChars());
-  return `[${type.replace(/Message$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} message]`;
+  return `[${displayType(type)} message]`;
 }
 
 function timestampIso(timestampSeconds: number): string {
@@ -423,6 +462,7 @@ export async function recordRecoverableMessage(
         chatJid,
         messageId: id,
         messageType: type,
+        viewOnce: type.startsWith('viewOnce:') || undefined,
         mediaKind: media?.kind,
         mediaStorage: media?.storage,
         mediaSize: media?.size,
@@ -441,6 +481,7 @@ export async function recordRecoverableMessage(
     messageType: type,
     text: displayText(text || messageText(message.message), type),
     media,
+    viewOnce: type.startsWith('viewOnce:') || undefined,
     timestamp: timestampIso(timestampSeconds),
   };
 
