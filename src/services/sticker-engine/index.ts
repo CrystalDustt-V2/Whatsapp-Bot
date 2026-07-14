@@ -20,7 +20,7 @@ export class StickerEngine {
   ): Promise<Buffer> {
     let sticker = await this.renderer.processImage(buffer, options);
     sticker = await this.optimizer.optimize(sticker, options.quality || 80);
-    sticker = this.withMetadata(sticker, options);
+    sticker = await this.withMetadata(sticker, options);
     return sticker;
   }
 
@@ -31,11 +31,11 @@ export class StickerEngine {
   ): Promise<Buffer> {
     let sticker = await this.renderer.applyShape(buffer, shape, 50);
     sticker = await this.optimizer.optimize(sticker, options.quality || 80);
-    sticker = this.withMetadata(sticker, options);
+    sticker = await this.withMetadata(sticker, options);
     return sticker;
   }
 
-  private withMetadata(sticker: Buffer, options: StickerOptions): Buffer {
+  private async withMetadata(sticker: Buffer, options: StickerOptions): Promise<Buffer> {
     if (options.packName === undefined && options.author === undefined) return sticker;
     return this.metadataManager.addMetadata(sticker, options.packName || '', options.author || '');
   }
