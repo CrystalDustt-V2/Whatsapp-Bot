@@ -3,35 +3,26 @@ dist/
 sessions/
 logs/
 temp/
+storage/
 .env
+*.env.local
 *.log
 .DS_Store
 coverage/
 /runtime.env
 skills-lock.json
+.codex/
 .agents/
+.planning/
+.vscode/
+.local/
+cookies.txt
+*.cookies.txt
+openai keys.txt
+features list.txt
 user-specific-files/
+dashboard/
 
 /src/generated/prisma
 
-# Dashboard
-/dashboard/node_modules/
-/dashboard/.pnp
-/dashboard/.pnp.*
-/dashboard/.yarn/*
-!/dashboard/.yarn/patches
-!/dashboard/.yarn/plugins
-!/dashboard/.yarn/releases
-!/dashboard/.yarn/versions
-/dashboard/.next/
-/dashboard/out/
-/dashboard/build/
-/dashboard/.vercel
-/dashboard/.env*
-/dashboard/*.pem
-/dashboard/npm-debug.log*
-/dashboard/yarn-debug.log*
-/dashboard/yarn-error.log*
-/dashboard/.pnpm-debug.log*
-/dashboard/*.tsbuildinfo
-/dashboard/next-env.d.ts
+# Optional dashboard/site workspace lives in its own repo.

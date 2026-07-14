@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-hybrid-bot",
   "version": "1.0.0",
-  "description": "Production-grade modular WhatsApp Hybrid Bot Platform",
+  "description": "TypeScript WhatsApp hybrid personal bot powered by Baileys",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -18,7 +18,7 @@
     "baileys",
     "typescript"
   ],
-  "author": "WhatsApp Hybrid Bot Platform",
+  "author": "CrystalDust",
   "license": "MIT",
   "dependencies": {
     "@heyputer/puter.js": "^2.5.4",

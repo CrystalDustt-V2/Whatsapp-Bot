@@ -2,13 +2,22 @@
 .env.*
 !.env.example
 node_modules
-dashboard/node_modules
 dist
-dashboard/.next
 sessions
 logs
 temp
 storage
+.codex
+.agents
+.vscode
+.planning
+.local
+dashboard
+user-specific-files
+runtime.env
+cookies.txt
+*.cookies.txt
+openai keys.txt
 *.log
 .git
 .gitignore
