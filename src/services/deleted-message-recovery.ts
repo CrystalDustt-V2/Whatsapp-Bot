@@ -327,13 +327,17 @@ async function storeMediaBuffer(
   buffer: Buffer
 ): Promise<RecoverableMediaRecord> {
   if (config.DELETED_MESSAGE_MEDIA_STORAGE === 'mega') {
-    const uploaded = await uploadMegaFile(base.fileName, buffer);
-    return {
-      ...base,
-      storage: 'mega',
-      megaNodeId: uploaded.id,
-      size: uploaded.size || base.size,
-    };
+    try {
+      const uploaded = await uploadMegaFile(base.fileName, buffer);
+      return {
+        ...base,
+        storage: 'mega',
+        megaNodeId: uploaded.id,
+        size: uploaded.size || base.size,
+      };
+    } catch (err) {
+      logger.warn({ err, fileName: base.fileName }, 'Could not upload deleted-message media to MEGA; storing locally instead');
+    }
   }
 
   const filePath = path.join(mediaDir, base.fileName);

@@ -3,12 +3,23 @@ import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import type { proto } from '@whiskeysockets/baileys';
 import { stickerEngine } from '../services/sticker-engine';
 
+const STICKER_WATERMARK = 'Created with CrystalDust V0 Bot';
+const SHAPES = new Set(['circle', 'rounded']);
+
+function parseStickerArgs(rawArgs = ''): { shape?: 'circle' | 'rounded'; metadata: string } {
+  const trimmed = rawArgs.trim();
+  const [first = ''] = trimmed.split(/\s+/, 1);
+  const shape = SHAPES.has(first.toLowerCase()) ? first.toLowerCase() as 'circle' | 'rounded' : undefined;
+  const metadata = (shape ? trimmed.slice(first.length) : trimmed).trim().replace(/\s+/g, ' ').slice(0, 64);
+  return { shape, metadata };
+}
+
 export const StickerCommand: Command = {
   name: 'sticker',
   aliases: ['s', 'stiker'],
   category: CommandCategory.STICKER,
   description: 'Convert image/video to sticker',
-  usage: 'sticker [circle|rounded] [pack] [author]',
+  usage: 'sticker [circle|rounded] [metadata]',
   async execute(ctx) {
     const msg = ctx.message.message;
     if (!msg) return;
@@ -46,17 +57,14 @@ export const StickerCommand: Command = {
       const buffer = Buffer.concat(chunks);
 
       let processedBuffer: Buffer;
-      const shapeArg = ctx.args[0]?.toLowerCase();
-      const pack = ctx.args.find(a => !['circle', 'rounded'].includes(a.toLowerCase())) || 'WhatsApp Hybrid Bot';
-      const author = ctx.args.find(a => !['circle', 'rounded'].includes(a.toLowerCase()) && a !== pack) || 'Bot';
+      const { shape, metadata } = parseStickerArgs(ctx.rawArgs);
+      const options = { packName: metadata, author: STICKER_WATERMARK };
 
       if ('mimetype' in media && media.mimetype?.startsWith('image/')) {
-        if (shapeArg === 'circle') {
-          processedBuffer = await stickerEngine.createShapedSticker(buffer, 'circle', { packName: pack, author });
-        } else if (shapeArg === 'rounded') {
-          processedBuffer = await stickerEngine.createShapedSticker(buffer, 'rounded', { packName: pack, author });
+        if (shape) {
+          processedBuffer = await stickerEngine.createShapedSticker(buffer, shape, options);
         } else {
-          processedBuffer = await stickerEngine.createSticker(buffer, { packName: pack, author, smartCrop: true });
+          processedBuffer = await stickerEngine.createSticker(buffer, { ...options, smartCrop: true });
         }
       } else {
         processedBuffer = buffer;
