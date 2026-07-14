@@ -1,5 +1,6 @@
 import type { WASocket } from '@whiskeysockets/baileys';
 import cors from 'cors';
+import crypto from 'crypto';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -7,6 +8,7 @@ import qrcode from 'qrcode';
 import { Server as SocketIOServer } from 'socket.io';
 import { commandRegistry } from './command-registry';
 import logger from './logger';
+import config from '../config';
  
 interface ApiServerOptions {
   port?: number;
@@ -45,8 +47,62 @@ export class ApiServer {
     };
   }
 
+  private getPublicConfigPayload() {
+    return {
+      botName: 'CrystalDust V0 Bot',
+      ownerName: config.OWNER_NAME,
+      prefix: config.BOT_PREFIX,
+      scriptUrl: config.SCRIPT_URL || '',
+      donateText: config.DONATE_TEXT || '',
+      rulesText: config.RULES_TEXT || '',
+    };
+  }
+
   private async getAuthQRDataUrl() {
     return qrcode.toDataURL(this.authQR!);
+  }
+
+  private cookieValue(header: string | undefined, name: string): string | undefined {
+    const value = header
+      ?.split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${name}=`))
+      ?.slice(name.length + 1);
+    return value ? decodeURIComponent(value) : undefined;
+  }
+
+  private tokenMatches(value: unknown): boolean {
+    const token = config.DASHBOARD_AUTH_TOKEN || '';
+    if (!token || typeof value !== 'string') return false;
+    const left = Buffer.from(value);
+    const right = Buffer.from(token);
+    return left.length === right.length && crypto.timingSafeEqual(left, right);
+  }
+
+  private isDashboardAuthorized(req: express.Request): boolean {
+    return this.tokenMatches(req.query.token) ||
+      this.tokenMatches(req.header('x-dashboard-token')) ||
+      this.tokenMatches(this.cookieValue(req.header('cookie'), 'dashboard_auth'));
+  }
+
+  private requireDashboardAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if (!config.DASHBOARD_AUTH_TOKEN) {
+      res.status(403).send('DASHBOARD_AUTH_TOKEN is not configured.');
+      return;
+    }
+
+    if (this.tokenMatches(req.query.token)) {
+      res.setHeader('Set-Cookie', `dashboard_auth=${encodeURIComponent(String(req.query.token))}; HttpOnly; SameSite=Strict; Path=/`);
+      res.redirect('/auth');
+      return;
+    }
+
+    if (!this.isDashboardAuthorized(req)) {
+      res.status(401).send('Private auth console. Open /auth?token=YOUR_TOKEN.');
+      return;
+    }
+
+    next();
   }
  
   setBotSocket(socket: WASocket) {
@@ -66,27 +122,43 @@ export class ApiServer {
   async setAuthQR(qr: string) {
     this.authQR = qr;
     const qrDataUrl = await this.getAuthQRDataUrl();
-    this.io.emit('auth:qr', { qr: qrDataUrl });
+    this.io.to('auth').emit('auth:qr', { qr: qrDataUrl });
   }
 
   setPairingCode(code: string) {
     this.pairingCode = code;
-    this.io.emit('auth:pairing-code', { code });
+    this.io.to('auth').emit('auth:pairing-code', { code });
   }
  
   private setupMiddleware() {
     this.app.use(cors());
     this.app.use(express.json());
-    this.app.use(express.static(path.join(process.cwd(), 'public')));
   }
  
   private setupRoutes() {
     this.app.get('/', (req, res) => {
       res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
     });
+
+    this.app.get('/auth', this.requireDashboardAuth.bind(this), (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'public', 'auth.html'));
+    });
+
+    this.app.get('/auth.html', this.requireDashboardAuth.bind(this), (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'public', 'auth.html'));
+    });
+
+    this.app.get('/auth/logout', (req, res) => {
+      res.setHeader('Set-Cookie', 'dashboard_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+      res.redirect('/');
+    });
  
     this.app.get('/api/status', (req, res) => {
       res.json(this.getStatusPayload());
+    });
+
+    this.app.get('/api/public-config', (req, res) => {
+      res.json(this.getPublicConfigPayload());
     });
 
     this.app.get('/healthz', (req, res) => {
@@ -106,7 +178,7 @@ export class ApiServer {
       });
     });
  
-    this.app.get('/api/auth/qr', async (req, res) => {
+    this.app.get('/api/auth/qr', this.requireDashboardAuth.bind(this), async (req, res) => {
       if (!this.authQR) {
         return res.status(404).json({ error: 'QR not available' });
       }
@@ -115,28 +187,33 @@ export class ApiServer {
       res.json({ qr: qrDataUrl });
     });
 
-    this.app.get('/api/auth/pairing-code', (req, res) => {
+    this.app.get('/api/auth/pairing-code', this.requireDashboardAuth.bind(this), (req, res) => {
       if (!this.pairingCode) {
         return res.status(404).json({ error: 'Pairing code not available' });
       }
 
       res.json({ code: this.pairingCode });
     });
+
+    this.app.use(express.static(path.join(process.cwd(), 'public')));
   }
  
   private setupSocketIO() {
     this.io.on('connection', (socket) => {
       logger.info(`Socket connected: ${socket.id}`);
+      const socketToken = socket.handshake.auth?.token || socket.handshake.query?.token;
+      const authed = this.tokenMatches(socketToken) || this.tokenMatches(this.cookieValue(socket.handshake.headers.cookie, 'dashboard_auth'));
+      if (authed) socket.join('auth');
  
       socket.emit('status', this.getStatusPayload());
 
-      if (this.authQR) {
+      if (authed && this.authQR) {
         this.getAuthQRDataUrl()
           .then((qrDataUrl) => socket.emit('auth:qr', { qr: qrDataUrl }))
           .catch((err) => logger.error({ err }, 'Failed to send cached QR code'));
       }
 
-      if (this.pairingCode) {
+      if (authed && this.pairingCode) {
         socket.emit('auth:pairing-code', { code: this.pairingCode });
       }
  

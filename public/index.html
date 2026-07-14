@@ -1,296 +1,314 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Hybrid Bot - Auth</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            padding: 40px;
-            max-width: 500px;
-            width: 100%;
-            text-align: center;
-        }
-
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 28px;
-        }
-
-        .subtitle {
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 16px;
-        }
-
-        .status {
-            padding: 12px 20px;
-            border-radius: 10px;
-            margin-bottom: 25px;
-            font-weight: 600;
-        }
-
-        .status.disconnected {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .status.connected {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .qr-container {
-            background: #f8f9fa;
-            border-radius: 15px;
-            padding: 30px;
-            margin: 25px 0;
-            min-height: 300px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #qr-image {
-            max-width: 250px;
-            max-height: 250px;
-            border-radius: 10px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-        }
-
-        .pairing-code {
-            color: #222;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 34px;
-            font-weight: 800;
-            letter-spacing: 6px;
-            margin-bottom: 12px;
-        }
-
-        .pairing-help {
-            color: #666;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-
-        .waiting-text {
-            color: #666;
-            font-size: 16px;
-        }
-
-        .instructions {
-            text-align: left;
-            background: #f0f4ff;
-            border-radius: 10px;
-            padding: 20px;
-            margin-top: 25px;
-        }
-
-        .instructions h3 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-size: 18px;
-        }
-
-        .instructions ol {
-            color: #333;
-            margin-left: 20px;
-        }
-
-        .instructions li {
-            margin-bottom: 10px;
-            line-height: 1.6;
-        }
-
-        .features {
-            margin-top: 25px;
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-        }
-
-        .feature {
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 14px;
-            color: #555;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-    </style>
-    <script src="/socket.io/socket.io.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrystalDust V0 Bot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      color-scheme: dark;
+      --bg: #0f1418;
+      --panel: #151c22;
+      --panel-soft: #1b242b;
+      --line: #29343d;
+      --text: #edf4f2;
+      --muted: #93a4ad;
+      --green: #28d17c;
+      --green-soft: rgba(40, 209, 124, .12);
+    }
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    a { color: inherit; text-decoration: none; }
+    .shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15, 20, 24, .88);
+      backdrop-filter: blur(14px);
+    }
+    .nav {
+      height: 68px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 18px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; }
+    .mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--green-soft);
+      color: var(--green);
+    }
+    .nav-links { display: flex; gap: 16px; color: var(--muted); font-size: 14px; }
+    .nav-links a:hover { color: var(--text); }
+    .hero {
+      padding: 72px 0 40px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr);
+      gap: 32px;
+      align-items: stretch;
+    }
+    .eyebrow { color: var(--green); font-weight: 800; text-transform: uppercase; letter-spacing: .1em; font-size: 13px; }
+    h1 { font-size: clamp(40px, 7vw, 76px); line-height: .95; letter-spacing: -0.03em; margin-top: 14px; }
+    .lead { max-width: 680px; margin-top: 22px; color: var(--muted); font-size: 18px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      font-weight: 750;
+    }
+    .button.primary { border-color: transparent; background: var(--green); color: #07110b; }
+    .button.disabled { color: var(--muted); cursor: not-allowed; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .panel-pad { padding: 22px; }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #64748b;
+      box-shadow: 0 0 0 6px rgba(100, 116, 139, .12);
+    }
+    .status-dot.connected {
+      background: var(--green);
+      box-shadow: 0 0 0 6px var(--green-soft);
+    }
+    .status-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .status-title { font-size: 20px; font-weight: 800; }
+    .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
+    .metric { padding: 14px; border-radius: 10px; background: var(--panel-soft); }
+    .metric strong { display: block; font-size: 22px; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    section { padding: 34px 0; }
+    .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 18px; }
+    h2 { font-size: 28px; letter-spacing: -0.02em; }
+    .muted { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .card { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .card h3 { font-size: 17px; margin-bottom: 8px; }
+    .command-tools { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+    input {
+      width: min(420px, 100%);
+      min-height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0d1216;
+      color: var(--text);
+      outline: none;
+    }
+    input:focus { border-color: var(--green); }
+    .command-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .command {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .command strong { color: var(--green); }
+    .command p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+    .footer { padding: 28px 0 44px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 36px; }
+    @media (max-width: 820px) {
+      .nav { height: auto; padding: 14px 0; align-items: start; }
+      .nav-links { display: none; }
+      .hero { grid-template-columns: 1fr; padding-top: 42px; }
+      .grid, .command-list, .metric-grid { grid-template-columns: 1fr; }
+      .section-head { display: block; }
+      .section-head .muted { margin-top: 6px; }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📱 WhatsApp Hybrid Bot</h1>
-        <p class="subtitle">Connect your WhatsApp account to get started</p>
-        
-        <div id="status" class="status disconnected">
-            Status: Waiting for QR Code...
+  <header>
+    <nav class="shell nav">
+      <a class="brand" href="/">
+        <span class="mark">CD</span>
+        <span>CrystalDust V0 Bot</span>
+      </a>
+      <div class="nav-links">
+        <a href="#commands">Commands</a>
+        <a href="#stickers">Stickers</a>
+        <a href="#support">Support</a>
+        <a href="/auth">Auth</a>
+      </div>
+    </nav>
+  </header>
+
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">WhatsApp half bot</p>
+        <h1>A normal WhatsApp account with useful tools attached.</h1>
+        <p class="lead">CrystalDust V0 Bot helps with stickers, media edits, music search, quick utilities, deleted-message recovery, and AI chat when you actually need it.</p>
+        <div class="actions">
+          <a class="button primary" href="#commands">View Commands</a>
+          <a id="source-link" class="button disabled" href="#" aria-disabled="true">GitHub Coming Soon</a>
+          <a class="button" href="#support">Help Center</a>
         </div>
+      </div>
 
-        <div class="qr-container">
-            <div id="waiting">
-                <p class="waiting-text">Generating QR Code...</p>
-                <p style="color: #999; margin-top: 10px; font-size: 14px;">Please wait...</p>
-            </div>
-            <img id="qr-image" class="hidden" alt="WhatsApp QR Code">
-            <div id="pairing-code" class="hidden">
-                <div id="pairing-code-value" class="pairing-code"></div>
-                <p class="pairing-help">Open WhatsApp → Linked Devices → Link with phone number, then enter this code.</p>
-            </div>
-            <div id="connected-message" class="hidden">
-                <h2 style="color: #28a745; margin-bottom: 10px;">✅ Connected!</h2>
-                <p style="color: #666;">Your WhatsApp is now connected!</p>
-            </div>
+      <aside class="panel panel-pad">
+        <div class="status-head">
+          <div>
+            <p class="muted">Live backend</p>
+            <p id="status-text" class="status-title">Checking...</p>
+          </div>
+          <span id="status-dot" class="status-dot"></span>
         </div>
-
-        <div class="instructions">
-            <h3>📋 How to Connect</h3>
-            <ol>
-                <li>Open <strong>WhatsApp</strong> on your phone</li>
-                <li>Go to <strong>Settings</strong> → <strong>Linked Devices</strong></li>
-                <li>Tap <strong>Link a Device</strong></li>
-                <li>Scan the <strong>QR code</strong> above, or use the phone pairing code if shown</li>
-            </ol>
+        <div class="metric-grid">
+          <div class="metric"><strong id="command-count">-</strong><span>Commands</span></div>
+          <div class="metric"><strong id="uptime">-</strong><span>Uptime</span></div>
+          <div class="metric"><strong id="prefix">.</strong><span>Prefix</span></div>
         </div>
+      </aside>
+    </section>
 
-        <div class="features">
-            <div class="feature">🎮 Fun Commands</div>
-            <div class="feature">🎨 Sticker Filters</div>
-            <div class="feature">🖼️ Image Editing</div>
-            <div class="feature">🔧 Utility Tools</div>
+    <section id="commands">
+      <div class="section-head">
+        <div>
+          <h2>Commands</h2>
+          <p class="muted">Search the bot command list from the running backend.</p>
         </div>
-    </div>
+        <input id="command-search" placeholder="Search commands..." autocomplete="off">
+      </div>
+      <div id="command-list" class="command-list">
+        <div class="card muted">Loading commands...</div>
+      </div>
+    </section>
 
-    <script>
-        const statusElement = document.getElementById('status');
-        const qrImage = document.getElementById('qr-image');
-        const pairingCodeDiv = document.getElementById('pairing-code');
-        const pairingCodeValue = document.getElementById('pairing-code-value');
-        const waitingDiv = document.getElementById('waiting');
-        const connectedMessage = document.getElementById('connected-message');
+    <section id="stickers">
+      <div class="section-head">
+        <div>
+          <h2>Sticker Pack Collections</h2>
+          <p class="muted">Starter collections shown locally until a sticker-pack API exists.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <article class="card"><h3>Brat Stickers</h3><p class="muted">Text stickers with white or green backgrounds.</p></article>
+        <article class="card"><h3>Filter Stickers</h3><p class="muted">Black-white, sepia, vintage, cartoon, and glitch styles.</p></article>
+        <article class="card"><h3>Metadata Stickers</h3><p class="muted">Optional pack name plus the CrystalDust V0 watermark.</p></article>
+      </div>
+    </section>
 
-        function showConnected() {
-            statusElement.textContent = 'Status: Connected!';
-            statusElement.className = 'status connected';
-            qrImage.classList.add('hidden');
-            pairingCodeDiv.classList.add('hidden');
-            waitingDiv.classList.add('hidden');
-            connectedMessage.classList.remove('hidden');
-        }
+    <section>
+      <div class="grid">
+        <article class="card">
+          <h3>Git Changelog</h3>
+          <p id="changelog" class="muted">Source repo is not public yet.</p>
+        </article>
+        <article class="card">
+          <h3>Donate</h3>
+          <p id="donate" class="muted">Donation details are not configured yet.</p>
+        </article>
+        <article id="support" class="card">
+          <h3>Ticket Support</h3>
+          <p class="muted">For now, message the bot owner directly. A ticket endpoint can be added later.</p>
+        </article>
+      </div>
+    </section>
+  </main>
 
-        function showQR(qr) {
-            qrImage.src = qr;
-            qrImage.classList.remove('hidden');
-            pairingCodeDiv.classList.add('hidden');
-            waitingDiv.classList.add('hidden');
-            connectedMessage.classList.add('hidden');
-            statusElement.textContent = 'Status: Scan QR Code to Connect';
-            statusElement.className = 'status disconnected';
-        }
+  <footer class="shell footer">CrystalDust V0 Bot. Public status page only. WhatsApp auth lives on the private console.</footer>
 
-        function showPairingCode(code) {
-            pairingCodeValue.textContent = code;
-            pairingCodeDiv.classList.remove('hidden');
-            qrImage.classList.add('hidden');
-            waitingDiv.classList.add('hidden');
-            connectedMessage.classList.add('hidden');
-            statusElement.textContent = 'Status: Enter Pairing Code in WhatsApp';
-            statusElement.className = 'status disconnected';
-        }
+  <script>
+    const state = { commands: [], config: {} };
+    const statusText = document.getElementById('status-text');
+    const statusDot = document.getElementById('status-dot');
+    const commandCount = document.getElementById('command-count');
+    const uptime = document.getElementById('uptime');
+    const prefix = document.getElementById('prefix');
+    const commandList = document.getElementById('command-list');
+    const commandSearch = document.getElementById('command-search');
 
-        async function checkStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-                
-                if (data.status === 'connected') {
-                    showConnected();
-                }
-            } catch (err) {
-                console.error('Error checking status:', err);
-            }
-        }
+    function uptimeText(seconds) {
+      if (!Number.isFinite(seconds)) return '-';
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+    }
 
-        async function fetchQR() {
-            try {
-                const response = await fetch('/api/auth/qr');
-                if (response.ok) {
-                    const data = await response.json();
-                    showQR(data.qr);
-                }
-            } catch (err) {
-                console.log('QR not ready yet...');
-            }
-        }
+    function renderCommands() {
+      const query = commandSearch.value.trim().toLowerCase();
+      const commands = state.commands
+        .filter((cmd) => `${cmd.name} ${cmd.category} ${cmd.description || ''}`.toLowerCase().includes(query))
+        .slice(0, 24);
 
-        async function fetchPairingCode() {
-            try {
-                const response = await fetch('/api/auth/pairing-code');
-                if (response.ok) {
-                    const data = await response.json();
-                    showPairingCode(data.code);
-                }
-            } catch (err) {
-                console.log('Pairing code not ready yet...');
-            }
-        }
+      if (!commands.length) {
+        commandList.innerHTML = '<div class="card muted">No commands found.</div>';
+        return;
+      }
 
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}`;
-            const socket = io(wsUrl);
-            
-            socket.on('connect', () => {
-                console.log('WebSocket connected');
-            });
+      commandList.innerHTML = commands.map((cmd) => `
+        <article class="command">
+          <strong>${state.config.prefix || '.'}${cmd.name}</strong>
+          <p>${cmd.category || 'Command'}${cmd.description ? ` - ${cmd.description}` : ''}</p>
+        </article>
+      `).join('');
+    }
 
-            socket.on('auth:qr', (data) => {
-                showQR(data.qr);
-            });
+    async function loadPublicConfig() {
+      const response = await fetch('/api/public-config');
+      state.config = await response.json();
+      prefix.textContent = state.config.prefix || '.';
 
-            socket.on('auth:pairing-code', (data) => {
-                showPairingCode(data.code);
-            });
+      if (state.config.scriptUrl) {
+        const source = document.getElementById('source-link');
+        source.href = state.config.scriptUrl;
+        source.textContent = 'GitHub Source';
+        source.classList.remove('disabled');
+        source.removeAttribute('aria-disabled');
+        document.getElementById('changelog').innerHTML = `Source available at <a href="${state.config.scriptUrl}">GitHub</a>.`;
+      }
 
-            socket.on('bot:connected', () => {
-                showConnected();
-            });
-        }
+      if (state.config.donateText) {
+        document.getElementById('donate').textContent = state.config.donateText;
+      }
+    }
 
-        checkStatus();
-        fetchQR();
-        fetchPairingCode();
-        setInterval(() => {
-            fetchQR();
-            fetchPairingCode();
-        }, 2000);
-        connectWebSocket();
-    </script>
+    async function loadStatus() {
+      const response = await fetch('/api/status');
+      const data = await response.json();
+      const connected = data.status === 'connected';
+      statusText.textContent = connected ? 'Connected' : 'Disconnected';
+      statusDot.classList.toggle('connected', connected);
+      commandCount.textContent = data.commands ?? '-';
+      uptime.textContent = uptimeText(data.uptime);
+    }
+
+    async function loadCommands() {
+      const response = await fetch('/api/commands');
+      const data = await response.json();
+      state.commands = data.commands || [];
+      renderCommands();
+    }
+
+    commandSearch.addEventListener('input', renderCommands);
+    loadPublicConfig().catch(() => {});
+    loadStatus().catch(() => { statusText.textContent = 'Unavailable'; });
+    loadCommands().catch(() => { commandList.innerHTML = '<div class="card muted">Commands endpoint is unavailable.</div>'; });
+    setInterval(loadStatus, 10000);
+  </script>
 </body>
 </html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrystalDust V0 Bot - Private Auth</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: #101418;
+      color: #172026;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .container {
+      width: min(500px, 100%);
+      padding: 34px;
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .35);
+      text-align: center;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    .eyebrow { color: #64748b; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    h1 { font-size: 27px; line-height: 1.1; margin-top: 4px; }
+    a { color: #0f766e; font-weight: 700; text-decoration: none; }
+    .status {
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 22px;
+      font-weight: 700;
+    }
+    .status.disconnected { background: #fff7ed; color: #9a3412; }
+    .status.connected { background: #dcfce7; color: #166534; }
+    .qr-container {
+      min-height: 300px;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      border-radius: 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      margin-bottom: 22px;
+    }
+    #qr-image {
+      max-width: 250px;
+      max-height: 250px;
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .12);
+    }
+    .pairing-code {
+      color: #0f172a;
+      font-family: "Courier New", monospace;
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: 6px;
+      margin-bottom: 12px;
+    }
+    .muted { color: #64748b; line-height: 1.55; }
+    .instructions {
+      text-align: left;
+      background: #f1f5f9;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .instructions h2 { color: #0f766e; font-size: 18px; margin-bottom: 12px; }
+    .instructions ol { margin-left: 20px; color: #334155; }
+    .instructions li { margin-bottom: 9px; line-height: 1.55; }
+    .hidden { display: none !important; }
+  </style>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <main class="container">
+    <div class="topbar">
+      <div>
+        <div class="eyebrow">Private Console</div>
+        <h1>WhatsApp Auth</h1>
+      </div>
+      <a href="/auth/logout">Logout</a>
+    </div>
+
+    <div id="status" class="status disconnected">Status: Waiting for QR Code...</div>
+
+    <section class="qr-container">
+      <div id="waiting">
+        <p class="muted">Generating QR or pairing code...</p>
+      </div>
+      <img id="qr-image" class="hidden" alt="WhatsApp QR Code">
+      <div id="pairing-code" class="hidden">
+        <div id="pairing-code-value" class="pairing-code"></div>
+        <p class="muted">Open WhatsApp -> Linked Devices -> Link with phone number, then enter this code.</p>
+      </div>
+      <div id="connected-message" class="hidden">
+        <h2 style="color:#16a34a;margin-bottom:8px;">Connected</h2>
+        <p class="muted">Your WhatsApp account is linked.</p>
+      </div>
+    </section>
+
+    <section class="instructions">
+      <h2>How To Connect</h2>
+      <ol>
+        <li>Open WhatsApp on your phone.</li>
+        <li>Go to Settings -> Linked Devices.</li>
+        <li>Tap Link a Device.</li>
+        <li>Scan the QR code above, or enter the pairing code if shown.</li>
+      </ol>
+    </section>
+  </main>
+
+  <script>
+    const statusElement = document.getElementById('status');
+    const qrImage = document.getElementById('qr-image');
+    const pairingCodeDiv = document.getElementById('pairing-code');
+    const pairingCodeValue = document.getElementById('pairing-code-value');
+    const waitingDiv = document.getElementById('waiting');
+    const connectedMessage = document.getElementById('connected-message');
+
+    function showConnected() {
+      statusElement.textContent = 'Status: Connected';
+      statusElement.className = 'status connected';
+      qrImage.classList.add('hidden');
+      pairingCodeDiv.classList.add('hidden');
+      waitingDiv.classList.add('hidden');
+      connectedMessage.classList.remove('hidden');
+    }
+
+    function showQR(qr) {
+      qrImage.src = qr;
+      qrImage.classList.remove('hidden');
+      pairingCodeDiv.classList.add('hidden');
+      waitingDiv.classList.add('hidden');
+      connectedMessage.classList.add('hidden');
+      statusElement.textContent = 'Status: Scan QR Code';
+      statusElement.className = 'status disconnected';
+    }
+
+    function showPairingCode(code) {
+      pairingCodeValue.textContent = code;
+      pairingCodeDiv.classList.remove('hidden');
+      qrImage.classList.add('hidden');
+      waitingDiv.classList.add('hidden');
+      connectedMessage.classList.add('hidden');
+      statusElement.textContent = 'Status: Enter Pairing Code';
+      statusElement.className = 'status disconnected';
+    }
+
+    async function checkStatus() {
+      const response = await fetch('/api/status');
+      const data = await response.json();
+      if (data.status === 'connected') showConnected();
+    }
+
+    async function fetchAuthData() {
+      for (const [url, handler] of [
+        ['/api/auth/qr', (data) => showQR(data.qr)],
+        ['/api/auth/pairing-code', (data) => showPairingCode(data.code)],
+      ]) {
+        try {
+          const response = await fetch(url);
+          if (response.ok) handler(await response.json());
+        } catch {}
+      }
+    }
+
+    function connectWebSocket() {
+      const socket = io();
+      socket.on('auth:qr', (data) => showQR(data.qr));
+      socket.on('auth:pairing-code', (data) => showPairingCode(data.code));
+      socket.on('bot:connected', showConnected);
+      socket.on('status', (data) => {
+        if (data.status === 'connected') showConnected();
+      });
+    }
+
+    checkStatus().catch(() => {});
+    fetchAuthData();
+    setInterval(fetchAuthData, 2500);
+    connectWebSocket();
+  </script>
+</body>
+</html>

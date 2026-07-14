@@ -13,6 +13,7 @@ const ConfigSchema = z.object({
   AUTH_PHONE_NUMBER: z.string().optional(),
   OWNER_NAME: z.string().default('Owner'),
   DASHBOARD_URL: z.string().default('http://localhost:3001'),
+  DASHBOARD_AUTH_TOKEN: z.string().optional(),
   SCRIPT_URL: z.string().optional(),
   DONATE_TEXT: z.string().optional(),
   RULES_TEXT: z.string().optional(),
