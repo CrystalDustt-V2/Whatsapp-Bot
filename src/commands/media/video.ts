@@ -72,7 +72,7 @@ export const VideoSpeedCommand: Command = {
 
 export const ExtractAudioCommand: Command = {
   name: 'extractaudio',
-  aliases: ['toaudio', 'videoaudio'],
+  aliases: ['videoaudio'],
   category: CommandCategory.MEDIA,
   description: 'Extract MP3 audio from a video',
   usage: 'extractaudio',

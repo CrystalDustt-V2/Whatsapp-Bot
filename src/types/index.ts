@@ -47,6 +47,7 @@ export interface CommandMetadata {
   name: string;
   aliases?: string[];
   category: CommandCategory;
+  hidden?: boolean;
   permissions?: PermissionLevel;
   cooldown?: number;
   usage?: string;

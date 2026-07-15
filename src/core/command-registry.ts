@@ -40,8 +40,16 @@ export class CommandRegistry {
       .filter((command): command is Command => Boolean(command));
   }
 
+  getVisibleAll(): Command[] {
+    return this.getAll().filter((cmd) => !cmd.hidden);
+  }
+
   getByCategory(category: CommandCategory): Command[] {
     return this.getAll().filter((cmd) => cmd.category === category);
+  }
+
+  getVisibleByCategory(category: CommandCategory): Command[] {
+    return this.getVisibleAll().filter((cmd) => cmd.category === category);
   }
 }
 

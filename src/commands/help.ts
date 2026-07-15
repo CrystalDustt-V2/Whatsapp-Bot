@@ -32,7 +32,7 @@ export const HelpCommand: Command = {
     const categories = Object.values(CommandCategory);
 
     for (const category of categories) {
-      const commands = commandRegistry.getByCategory(category);
+      const commands = commandRegistry.getVisibleByCategory(category);
       if (commands.length > 0) {
         text += `📁 *${category}*\n`;
         text += commands.map((c) => `• ${config.BOT_PREFIX}${c.name}`).join('\n');

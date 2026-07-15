@@ -15,6 +15,11 @@ type Player = {
   lastDaily?: string;
   clan?: string;
   inventory: Record<string, number>;
+  equipment?: {
+    weapon?: string;
+    armor?: string;
+    tool?: string;
+  };
   skills: Record<SkillName, number>;
   pet?: {
     name: string;
@@ -51,6 +56,22 @@ const SHOP: Record<string, ShopItem> = {
   iron: { price: 60, description: 'Crafting material' },
   petfood: { price: 30, description: 'Feeds your pet' },
   potion: { price: 80, description: 'Helps boss fights' },
+};
+const SELL_PRICES: Record<string, number> = {
+  bait: 8,
+  seed: 6,
+  wood: 7,
+  stone: 10,
+  iron: 30,
+  petfood: 12,
+  potion: 35,
+  meat: 18,
+  leather: 22,
+  crop: 12,
+  fish: 16,
+  pearl: 90,
+  gold: 120,
+  boss_trophy: 350,
 };
 const RECIPES: Record<string, Record<string, number>> = {
   pickaxe: { wood: 2, stone: 3 },
@@ -122,6 +143,14 @@ function targetJid(ctx: BotContext): string | null {
   return phone && phone.length >= 6 ? `${phone}@s.whatsapp.net` : null;
 }
 
+function targetJidFromArg(ctx: BotContext, index: number): string | null {
+  const mentioned = ctx.message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+  if (mentioned) return mentioned;
+
+  const phone = ctx.args[index]?.replace(/\D/g, '');
+  return phone && phone.length >= 6 ? `${phone}@s.whatsapp.net` : null;
+}
+
 function targetName(state: EconomyState, jid: string): string {
   return state.players[jid]?.name || jid.split('@')[0];
 }
@@ -158,7 +187,14 @@ function addXp(target: Player, xp: number, skill?: SkillName): void {
 
 function listInventory(target: Player): string {
   const entries = Object.entries(target.inventory).filter(([, count]) => count > 0);
-  return entries.length ? entries.map(([item, count]) => `- ${item}: ${count}`).join('\n') : 'Inventory empty.';
+  const equipment = target.equipment
+    ? Object.entries(target.equipment)
+        .filter(([, item]) => item)
+        .map(([slot, item]) => `${slot}: ${item}`)
+        .join('\n')
+    : '';
+  const inventory = entries.length ? entries.map(([item, count]) => `- ${item}: ${count}`).join('\n') : 'Inventory empty.';
+  return equipment ? `${inventory}\n\nEquipped\n${equipment}` : inventory;
 }
 
 function money(value: number): string {
@@ -306,6 +342,100 @@ export const TradeCommand = command('trade', ['giveitem'], 'Give an item to anot
   addItem(other, item, qty);
   saveState(state);
   await ctx.reply(`Gave ${qty} ${item} to ${targetName(state, jid)}.`);
+});
+
+export const SellCommand = command('sell', ['sellitem'], 'Sell inventory items for coins', 'sell <item|all> [qty]', async (ctx) => {
+  const state = loadState();
+  const me = player(state, ctx);
+  const item = ctx.args[0]?.toLowerCase();
+
+  if (!item) {
+    await ctx.reply('Usage: .sell <item|all> [qty]');
+    return;
+  }
+
+  if (item === 'all') {
+    let total = 0;
+    for (const [name, count] of Object.entries(me.inventory)) {
+      const price = SELL_PRICES[name];
+      if (!price || count <= 0) continue;
+      total += price * count;
+      addItem(me, name, -count);
+    }
+    if (!total) {
+      await ctx.reply('No sellable items in inventory.');
+      return;
+    }
+    me.wallet += total;
+    saveState(state);
+    await ctx.reply(`Sold all sellable items for ${money(total)}.`);
+    return;
+  }
+
+  const price = SELL_PRICES[item];
+  const owned = me.inventory[item] || 0;
+  const qty = amount(ctx.args[1] || '1', owned);
+  if (!price || !qty || owned < qty) {
+    await ctx.reply(`Cannot sell that. Sellable: ${Object.keys(SELL_PRICES).join(', ')}`);
+    return;
+  }
+
+  addItem(me, item, -qty);
+  me.wallet += price * qty;
+  saveState(state);
+  await ctx.reply(`Sold ${qty} ${item} for ${money(price * qty)}.`);
+});
+
+export const UseCommand = command('use', ['consume'], 'Use a consumable item', 'use <potion|petfood|meat|fish|crop>', async (ctx) => {
+  const item = ctx.args[0]?.toLowerCase();
+  const state = loadState();
+  const me = player(state, ctx);
+
+  if (!item || (me.inventory[item] || 0) < 1) {
+    await ctx.reply('Usage: .use <potion|petfood|meat|fish|crop>');
+    return;
+  }
+
+  if (item === 'petfood') {
+    if (!me.pet) {
+      await ctx.reply('No pet yet. Use .pet adopt <name>.');
+      return;
+    }
+    addItem(me, 'petfood', -1);
+    me.pet.hunger = Math.min(100, me.pet.hunger + 25);
+    me.pet.xp += 15;
+    saveState(state);
+    await ctx.reply(`${me.pet.name} fed. Hunger: ${me.pet.hunger}/100.`);
+    return;
+  }
+
+  const xp = item === 'potion' ? 75 : 15;
+  addItem(me, item, -1);
+  addXp(me, xp, item === 'potion' ? 'combat' : undefined);
+  saveState(state);
+  await ctx.reply(`Used ${item}. +${xp} XP.`);
+});
+
+export const EquipCommand = command('equip', ['wear'], 'Equip a crafted item', 'equip <sword|armor|pickaxe>', async (ctx) => {
+  const item = ctx.args[0]?.toLowerCase();
+  const slots: Record<string, keyof NonNullable<Player['equipment']>> = {
+    sword: 'weapon',
+    armor: 'armor',
+    pickaxe: 'tool',
+  };
+  const slot = item ? slots[item] : undefined;
+  const state = loadState();
+  const me = player(state, ctx);
+
+  if (!item || !slot || (me.inventory[item] || 0) < 1) {
+    await ctx.reply('Usage: .equip <sword|armor|pickaxe>');
+    return;
+  }
+
+  me.equipment ||= {};
+  me.equipment[slot] = item;
+  saveState(state);
+  await ctx.reply(`Equipped ${item}.`);
 });
 
 export const GambleCommand = command('gamble', ['bet'], 'Gamble wallet coins', 'gamble <amount>', async (ctx) => {
@@ -468,7 +598,11 @@ export const PetCommand = command('pet', ['pets'], 'Adopt, feed, or check a pet'
 export const BossCommand = command('boss', ['bossfight'], 'Fight a boss for rewards', 'boss', async (ctx) => {
   const state = loadState();
   const me = player(state, ctx);
-  const power = levelForXp(me.xp) + skillLevel(me.skills.combat) + (me.inventory.sword ? 2 : 0) + (me.inventory.armor ? 2 : 0);
+  const power =
+    levelForXp(me.xp) +
+    skillLevel(me.skills.combat) +
+    (me.equipment?.weapon === 'sword' || me.inventory.sword ? 2 : 0) +
+    (me.equipment?.armor === 'armor' || me.inventory.armor ? 2 : 0);
   const success = Math.random() * 12 < power;
 
   if (me.inventory.potion) addItem(me, 'potion', -1);
@@ -487,7 +621,7 @@ export const BossCommand = command('boss', ['bossfight'], 'Fight a boss for rewa
   await ctx.reply(`Boss defeated. +${money(reward)}, +150 XP, +1 boss_trophy.`);
 });
 
-export const ClanCommand = command('clan', ['guild'], 'Create, join, leave, or view clans', 'clan <create|join|leave|info> [name]', async (ctx) => {
+export const ClanCommand = command('clan', ['guild'], 'Create, join, leave, or manage clans', 'clan <create|join|leave|info|kick|promote> [name|@user]', async (ctx) => {
   const action = ctx.args[0]?.toLowerCase() || 'info';
   const name = ctx.args.slice(1).join(' ').trim().replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30);
   const state = loadState();
@@ -538,6 +672,37 @@ export const ClanCommand = command('clan', ['guild'], 'Create, join, leave, or v
     me.clan = undefined;
     saveState(state);
     await ctx.reply('Left clan.');
+    return;
+  }
+
+  if (action === 'kick' || action === 'promote') {
+    if (!me.clan) {
+      await ctx.reply('You are not in a clan.');
+      return;
+    }
+    const clan = state.clans[me.clan];
+    const target = targetJidFromArg(ctx, 1);
+    if (!clan || clan.ownerJid !== me.jid || !target || !clan.members.includes(target)) {
+      await ctx.reply(`Usage: .clan ${action} @user\nOnly the clan owner can manage members.`);
+      return;
+    }
+    if (target === me.jid) {
+      await ctx.reply('You cannot target yourself.');
+      return;
+    }
+
+    if (action === 'kick') {
+      clan.members = clan.members.filter((jid) => jid !== target);
+      const kicked = state.players[target];
+      if (kicked?.clan === me.clan) kicked.clan = undefined;
+      saveState(state);
+      await ctx.reply(`Kicked ${targetName(state, target)} from ${clan.name}.`);
+      return;
+    }
+
+    clan.ownerJid = target;
+    saveState(state);
+    await ctx.reply(`${targetName(state, target)} is now owner of ${clan.name}.`);
     return;
   }
 
@@ -596,6 +761,9 @@ export const EconomyCommands = [
   ShopCommand,
   InventoryCommand,
   TradeCommand,
+  SellCommand,
+  UseCommand,
+  EquipCommand,
   GambleCommand,
   RobCommand,
   RpgCommand,

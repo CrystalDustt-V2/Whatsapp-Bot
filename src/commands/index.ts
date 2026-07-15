@@ -1,4 +1,5 @@
 import { commandRegistry } from '../core/command-registry';
+import type { Command } from '../types';
 import PingCommand from './ping';
 import HelpCommand from './help';
 import MenuCommand from './menu';
@@ -95,6 +96,7 @@ import {
   trivia,
   guessword,
   answer,
+  skipquiz,
 } from './fun';
 import {
   blur,
@@ -113,6 +115,7 @@ import {
   pixelate,
   enhance,
   denoise,
+  toimage,
   tojpg,
   topng,
   towebp,
@@ -122,6 +125,7 @@ import {
   echo,
   compressaudio,
   vocalremover,
+  toaudio,
   tomp3,
   towav,
   toogg,
@@ -148,6 +152,10 @@ import {
 } from './sticker/shape';
 import { UrlStickerCommand as urlsticker } from './sticker/url';
 import { SbratStickerCommand as sbrat } from './sticker/sbrat';
+
+function hidden(command: Command): Command {
+  return { ...command, hidden: true };
+}
 
 export function loadCommands(): void {
   commandRegistry.register(PingCommand);
@@ -254,6 +262,7 @@ export function loadCommands(): void {
   commandRegistry.register(trivia);
   commandRegistry.register(guessword);
   commandRegistry.register(answer);
+  commandRegistry.register(skipquiz);
   commandRegistry.register(blur);
   commandRegistry.register(sharpen);
   commandRegistry.register(grayscale);
@@ -270,6 +279,7 @@ export function loadCommands(): void {
   commandRegistry.register(pixelate);
   commandRegistry.register(enhance);
   commandRegistry.register(denoise);
+  commandRegistry.register(toimage);
   commandRegistry.register(tojpg);
   commandRegistry.register(topng);
   commandRegistry.register(towebp);
@@ -279,6 +289,7 @@ export function loadCommands(): void {
   commandRegistry.register(echo);
   commandRegistry.register(compressaudio);
   commandRegistry.register(vocalremover);
+  commandRegistry.register(toaudio);
   commandRegistry.register(tomp3);
   commandRegistry.register(towav);
   commandRegistry.register(toogg);
@@ -286,20 +297,20 @@ export function loadCommands(): void {
   commandRegistry.register(videospeed);
   commandRegistry.register(extractaudio);
   commandRegistry.register(videogif);
-  commandRegistry.register(bwsticker);
-  commandRegistry.register(sepiasticker);
-  commandRegistry.register(vintagesticker);
-  commandRegistry.register(cartoonsticker);
-  commandRegistry.register(glitchsticker);
-  commandRegistry.register(memesticker);
-  commandRegistry.register(quotesticker);
-  commandRegistry.register(stext);
-  commandRegistry.register(srevert);
-  commandRegistry.register(circlesticker);
-  commandRegistry.register(roundedsticker);
-  commandRegistry.register(bordersticker);
-  commandRegistry.register(urlsticker);
-  commandRegistry.register(sbrat);
+  commandRegistry.register(hidden(bwsticker));
+  commandRegistry.register(hidden(sepiasticker));
+  commandRegistry.register(hidden(vintagesticker));
+  commandRegistry.register(hidden(cartoonsticker));
+  commandRegistry.register(hidden(glitchsticker));
+  commandRegistry.register(hidden(memesticker));
+  commandRegistry.register(hidden(quotesticker));
+  commandRegistry.register(hidden(stext));
+  commandRegistry.register(hidden(srevert));
+  commandRegistry.register(hidden(circlesticker));
+  commandRegistry.register(hidden(roundedsticker));
+  commandRegistry.register(hidden(bordersticker));
+  commandRegistry.register(hidden(urlsticker));
+  commandRegistry.register(hidden(sbrat));
 }
 
 export default loadCommands;

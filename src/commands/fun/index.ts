@@ -19,4 +19,5 @@ export {
   TriviaCommand as trivia,
   GuessWordCommand as guessword,
   AnswerCommand as answer,
+  SkipQuizCommand as skipquiz,
 } from './games';

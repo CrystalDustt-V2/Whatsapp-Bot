@@ -3,6 +3,7 @@ import * as path from 'path';
 import config from '../config';
 import type { BotContext, Command } from '../types';
 import { CommandCategory } from '../types';
+import { downloadMediaFromContext } from './media/helpers';
 
 type Product = {
   id: string;
@@ -24,6 +25,7 @@ type Order = {
   total: number;
   status: OrderStatus;
   createdAt: string;
+  paymentProofAt?: string;
 };
 
 type MarketplaceState = {
@@ -51,6 +53,11 @@ function saveState(state: MarketplaceState): void {
 function isOwner(ctx: BotContext): boolean {
   const owner = config.OWNER_NUMBER?.replace(/\D/g, '');
   return ctx.sender.fromMe || Boolean(owner && ctx.sender.phoneNumber.replace(/\D/g, '') === owner);
+}
+
+function ownerJid(): string | null {
+  const owner = config.OWNER_NUMBER?.replace(/\D/g, '');
+  return owner ? `${owner}@s.whatsapp.net` : null;
 }
 
 function money(value: number): string {
@@ -172,6 +179,38 @@ export const PaymentQrCommand = command('paymentqr', ['payment', 'payqr'], 'Show
   await ctx.reply(`${order ? `${formatOrder(order)}\n\n` : ''}${payment}`);
 });
 
+export const ConfirmOrderCommand = command('confirmorder', ['confirmpayment', 'paymentproof'], 'Submit payment proof for an order', 'confirmorder <order-id>', async (ctx) => {
+  const state = loadState();
+  const id = ctx.args[0] || '';
+  const order = state.orders[id];
+  const owner = ownerJid();
+
+  if (!order || !owner) {
+    await ctx.reply(owner ? 'Order not found.' : 'OWNER_NUMBER is not configured.');
+    return;
+  }
+  if (!isOwner(ctx) && order.buyerJid !== ctx.sender.jid) {
+    await ctx.reply('Only the buyer can confirm this order.');
+    return;
+  }
+
+  const media = await downloadMediaFromContext(ctx, ['image', 'document']);
+  if (!media) {
+    await ctx.reply('Reply to a receipt image/document with .confirmorder <order-id>.');
+    return;
+  }
+
+  order.paymentProofAt = new Date().toISOString();
+  saveState(state);
+
+  const caption = `Payment proof submitted\n${formatOrder(order)}\nFrom: ${ctx.sender.displayName}`;
+  await ctx.socket.sendMessage(owner, media.kind === 'image'
+    ? { image: media.buffer, mimetype: media.mimetype || 'image/jpeg', caption }
+    : { document: media.buffer, mimetype: media.mimetype || 'application/octet-stream', fileName: media.fileName || `payment-${id}.${media.extension}`, caption }
+  );
+  await ctx.reply('Payment proof sent to the owner. Wait for manual verification.');
+});
+
 export const AddProductCommand = command('addproduct', ['productadd'], 'Owner: add/update product', 'addproduct <id> | <name> | <price> | <stock> | <description>', async (ctx) => {
   if (!(await requireOwner(ctx))) return;
 
@@ -236,6 +275,7 @@ export const MarketplaceCommands = [
   InvoiceCommand,
   OrderTrackCommand,
   PaymentQrCommand,
+  ConfirmOrderCommand,
   AddProductCommand,
   SetStockCommand,
   SetOrderStatusCommand,

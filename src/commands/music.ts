@@ -487,6 +487,19 @@ function prettyPlatform(value?: string): string {
   return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
 }
 
+function platformFromToken(value: string): MusicPlatform | undefined {
+  const token = value.toLowerCase().replace(/^-+/, '');
+  return Object.values(platforms).find((platform) => platform.name === token || platform.aliases.includes(token));
+}
+
+function parsePlayArgs(args: string[]): { query: string; platform?: MusicPlatform } {
+  const platform = args[0] ? platformFromToken(args[0]) : undefined;
+  return {
+    platform,
+    query: (platform ? args.slice(1) : args).join(' ').trim(),
+  };
+}
+
 function playFailure(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
   if (message.includes('yt-dlp is not installed')) return 'yt-dlp is not installed on this server.';
@@ -534,17 +547,17 @@ export const PlayCommand: Command = {
   aliases: [],
   category: CommandCategory.DOWNLOADER,
   description: 'Search and play the best matching music result as audio',
-  usage: 'play <song name|url>',
+  usage: 'play [youtube|spotify|soundcloud|newgrounds] <song name|url>',
   async execute(ctx) {
-    const query = ctx.args.join(' ').trim();
+    const { query, platform } = parsePlayArgs(ctx.args);
     if (!query) {
-      await ctx.reply('Usage: .play <song name|url>');
+      await ctx.reply('Usage: .play [youtube|spotify|soundcloud|newgrounds] <song name|url>');
       return;
     }
 
     try {
-      await ctx.reply('Finding the best audio result...');
-      await playMusic(ctx, query);
+      await ctx.reply(platform ? `Finding ${platform.name} audio...` : 'Finding the best audio result...');
+      await playMusic(ctx, query, platform);
     } catch (err) {
       await ctx.reply(`Could not play audio for that request. ${playFailure(err)}`);
     }

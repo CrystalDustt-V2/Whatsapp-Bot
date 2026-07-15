@@ -435,7 +435,7 @@ async function replyText(ctx: BotContext, text: string): Promise<void> {
 
 function commandList(): string {
   return commandRegistry
-    .getAll()
+    .getVisibleAll()
     .filter((command) => command.name !== 'ai')
     .map((command) => `${config.BOT_PREFIX}${command.usage || command.name} - ${command.description || command.category}`)
     .join('\n');
@@ -539,7 +539,7 @@ function explicitCommandToolRequest(input: string): boolean {
   if (!/\b(?:bot command|command|run|use|call|execute)\b/i.test(input)) return false;
 
   const lower = input.toLowerCase();
-  return commandRegistry.getAll().some((command) =>
+  return commandRegistry.getVisibleAll().some((command) =>
     [command.name, ...(command.aliases || [])].some((name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(lower))
   );
 }

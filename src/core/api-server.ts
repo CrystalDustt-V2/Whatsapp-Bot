@@ -43,7 +43,7 @@ export class ApiServer {
     return {
       status: botSocket ? 'connected' : 'disconnected',
       uptime: process.uptime(),
-      commands: commandRegistry.getAll().length,
+      commands: commandRegistry.getVisibleAll().length,
     };
   }
 
@@ -170,7 +170,7 @@ export class ApiServer {
  
     this.app.get('/api/commands', (req, res) => {
       res.json({ 
-        commands: commandRegistry.getAll().map(cmd => ({ 
+        commands: commandRegistry.getVisibleAll().map(cmd => ({ 
           name: cmd.name, 
           category: cmd.category, 
           description: cmd.description, 

@@ -165,7 +165,7 @@ export const CoreExtraCommands = [
 
 export function getCoreCommandSummary(): string {
   return commandRegistry
-    .getByCategory(CommandCategory.CORE)
+    .getVisibleByCategory(CommandCategory.CORE)
     .map((command) => `${config.BOT_PREFIX}${command.name}`)
     .join(', ');
 }

@@ -1,8 +1,10 @@
+import config from '../../config';
 import { Command, CommandCategory } from '../../types';
 
 type Challenge = {
   type: string;
   answer: string;
+  ownerJid: string;
 };
 
 const challenges = new Map<string, Challenge>();
@@ -21,8 +23,25 @@ function chatId(ctx: Parameters<Command['execute']>[0]): string {
   return ctx.message.key.remoteJid || 'unknown';
 }
 
+function senderJid(ctx: Parameters<Command['execute']>[0]): string {
+  return ctx.message.key.participant || ctx.sender.jid || ctx.message.key.remoteJid || 'unknown';
+}
+
 function setChallenge(ctx: Parameters<Command['execute']>[0], challenge: Challenge): void {
   challenges.set(chatId(ctx), challenge);
+}
+
+async function canStopChallenge(ctx: Parameters<Command['execute']>[0], challenge: Challenge): Promise<boolean> {
+  const sender = senderJid(ctx);
+  const owner = config.OWNER_NUMBER?.replace(/\D/g, '');
+  if (sender === challenge.ownerJid || ctx.sender.fromMe || (owner && sender.startsWith(owner))) return true;
+
+  const jid = ctx.message.key.remoteJid;
+  if (!jid?.endsWith('@g.us')) return false;
+
+  const group = await ctx.socket.groupMetadata(jid);
+  const participant = group.participants.find((member) => member.id === sender);
+  return Boolean(participant?.admin || participant?.isAdmin || participant?.isSuperAdmin);
 }
 
 function pick<T>(items: T[]): T {
@@ -45,8 +64,8 @@ export const MathQuizCommand: Command = {
   async execute(ctx) {
     const a = Math.floor(Math.random() * 20) + 1;
     const b = Math.floor(Math.random() * 20) + 1;
-    setChallenge(ctx, { type: 'math', answer: String(a + b) });
-    await ctx.reply(`Math quiz: ${a} + ${b} = ?\nAnswer with .answer <answer>`);
+    setChallenge(ctx, { type: 'math', answer: String(a + b), ownerJid: senderJid(ctx) });
+    await ctx.reply(`Math quiz: ${a} + ${b} = ?\nAnswer with .answer <answer>\nStop with .skipquiz`);
   },
 };
 
@@ -58,8 +77,8 @@ export const TriviaCommand: Command = {
   usage: 'trivia',
   async execute(ctx) {
     const item = pick(trivia);
-    setChallenge(ctx, { type: 'trivia', answer: item.answer });
-    await ctx.reply(`${item.question}\nAnswer with .answer <answer>`);
+    setChallenge(ctx, { type: 'trivia', answer: item.answer, ownerJid: senderJid(ctx) });
+    await ctx.reply(`${item.question}\nAnswer with .answer <answer>\nStop with .skipquiz`);
   },
 };
 
@@ -71,8 +90,8 @@ export const GuessWordCommand: Command = {
   usage: 'guessword',
   async execute(ctx) {
     const word = pick(words);
-    setChallenge(ctx, { type: 'word', answer: word });
-    await ctx.reply(`Guess the word: ${scramble(word)}\nAnswer with .answer <answer>`);
+    setChallenge(ctx, { type: 'word', answer: word, ownerJid: senderJid(ctx) });
+    await ctx.reply(`Guess the word: ${scramble(word)}\nAnswer with .answer <answer>\nStop with .skipquiz`);
   },
 };
 
@@ -103,5 +122,29 @@ export const AnswerCommand: Command = {
     }
 
     await ctx.reply('Wrong. Try again.');
+  },
+};
+
+export const SkipQuizCommand: Command = {
+  name: 'skipquiz',
+  aliases: ['stopquiz', 'cancelquiz'],
+  category: CommandCategory.FUN,
+  description: 'Stop the active quiz in this chat',
+  usage: 'skipquiz',
+  async execute(ctx) {
+    const id = chatId(ctx);
+    const challenge = challenges.get(id);
+    if (!challenge) {
+      await ctx.reply('No active quiz in this chat.');
+      return;
+    }
+
+    if (!(await canStopChallenge(ctx, challenge))) {
+      await ctx.reply('Only the quiz starter, group admin, or owner can stop this quiz.');
+      return;
+    }
+
+    challenges.delete(id);
+    await ctx.reply(`Quiz skipped. Answer was: ${challenge.answer}`);
   },
 };

@@ -90,6 +90,45 @@ function createAudioConversionCommand(definition: AudioConversionCommand): Comma
   };
 }
 
+export const ToAudioCommand: Command = {
+  name: 'toaudio',
+  aliases: ['convertaudio', 'audioconvert'],
+  category: CommandCategory.MEDIA,
+  description: 'Convert audio or video to MP3, WAV, or OGG',
+  usage: 'toaudio <mp3|wav|ogg> [bitrate]',
+  async execute(ctx) {
+    const requestedFormat = (ctx.args[0] || '').toLowerCase();
+    const formats: Record<string, AudioConversionCommand> = {
+      mp3: { name: 'toaudio', aliases: [], format: OutputAudioFormat.MP3, mimetype: 'audio/mpeg' },
+      wav: { name: 'toaudio', aliases: [], format: OutputAudioFormat.WAV, mimetype: 'audio/wav' },
+      ogg: { name: 'toaudio', aliases: [], format: OutputAudioFormat.OGG, mimetype: 'audio/ogg' },
+    };
+    const definition = formats[requestedFormat];
+
+    if (!definition) {
+      await ctx.reply('Usage: .toaudio <mp3|wav|ogg> [bitrate]');
+      return;
+    }
+
+    const input = await getAudio(ctx);
+    if (!input) return;
+
+    try {
+      const audio = await mediaEngine.convertAudio(input, {
+        format: definition.format,
+        bitrate: numberArg(ctx.args[1], 128, 32, 320),
+      });
+      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+        document: audio,
+        mimetype: definition.mimetype,
+        fileName: `audio.${definition.format}`,
+      });
+    } catch {
+      await ctx.reply(`Failed to convert audio to ${definition.format}.`);
+    }
+  },
+};
+
 export const BassBoostCommand = createAudioCommand({
   name: 'bassboost',
   aliases: ['bass'],

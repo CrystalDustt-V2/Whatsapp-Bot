@@ -23,6 +23,7 @@ export {
   PixelateCommand as pixelate,
 } from './effects';
 export {
+  ToImageCommand as toimage,
   ToJpgCommand as tojpg,
   ToPngCommand as topng,
   ToWebpCommand as towebp,
@@ -34,6 +35,7 @@ export {
   EchoCommand as echo,
   AudioCompressorCommand as compressaudio,
   VocalRemoverCommand as vocalremover,
+  ToAudioCommand as toaudio,
   ToMp3Command as tomp3,
   ToWavCommand as towav,
   ToOggCommand as toogg,

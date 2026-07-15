@@ -49,6 +49,50 @@ function createImageConversionCommand(definition: ImageConversion): Command {
   };
 }
 
+export const ToImageCommand: Command = {
+  name: 'toimage',
+  aliases: ['convertimage', 'imgconvert'],
+  category: CommandCategory.MEDIA,
+  description: 'Convert an image to JPG, PNG, or WEBP',
+  usage: 'toimage <jpg|png|webp> [quality]',
+  async execute(ctx) {
+    const requestedFormat = (ctx.args[0] || '').toLowerCase();
+    const formats: Record<string, ImageConversion> = {
+      jpg: { name: 'toimage', aliases: [], format: ImageFormat.JPG, mimetype: 'image/jpeg' },
+      jpeg: { name: 'toimage', aliases: [], format: ImageFormat.JPG, mimetype: 'image/jpeg' },
+      png: { name: 'toimage', aliases: [], format: ImageFormat.PNG, mimetype: 'image/png' },
+      webp: { name: 'toimage', aliases: [], format: ImageFormat.WEBP, mimetype: 'image/webp' },
+    };
+    const definition = formats[requestedFormat];
+
+    if (!definition) {
+      await ctx.reply('Usage: .toimage <jpg|png|webp> [quality]');
+      return;
+    }
+
+    const media = await downloadMediaFromContext(ctx, ['image', 'document']);
+    if (!media) {
+      await ctx.reply('Please send or reply to an image with .toimage <jpg|png|webp> [quality]');
+      return;
+    }
+
+    try {
+      const output = await mediaEngine.convertImage(media.buffer, {
+        format: definition.format,
+        quality: parseQuality(ctx.args[1]),
+      });
+
+      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+        document: output,
+        mimetype: definition.mimetype,
+        fileName: `converted.${definition.format}`,
+      });
+    } catch {
+      await ctx.reply('Failed to convert this image.');
+    }
+  },
+};
+
 export const ToJpgCommand = createImageConversionCommand({
   name: 'tojpg',
   aliases: ['jpg', 'jpeg'],

@@ -63,7 +63,7 @@ function commandScore(command: Command, query: string): number {
 
 function searchCommands(query: string): SearchResult[] {
   return commandRegistry
-    .getAll()
+    .getVisibleAll()
     .map((command) => ({ command, score: commandScore(command, query) }))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || a.command.name.localeCompare(b.command.name));

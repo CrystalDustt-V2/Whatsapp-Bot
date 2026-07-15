@@ -1,5 +1,7 @@
 # CrystalDust V0 WhatsApp Bot
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/C4S823841D)
+
 CrystalDust V0 is a TypeScript WhatsApp hybrid bot. It connects to a normal
 WhatsApp account through WhatsApp Web/Baileys, then lets that account keep being
 used by a human while also responding to bot commands.

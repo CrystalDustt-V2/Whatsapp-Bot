@@ -10,7 +10,7 @@ export const MenuCommand: Command = {
   usage: 'menu [sub-category]',
   async execute(ctx) {
     const categories = Object.values(CommandCategory);
-    const totalCommands = commandRegistry.getAll().length;
+    const totalCommands = commandRegistry.getVisibleAll().length;
     const requestedCategory = ctx.args.join(' ').trim().toLowerCase();
 
     if (requestedCategory) {
@@ -18,7 +18,7 @@ export const MenuCommand: Command = {
 
       if (!category) {
         const available = categories
-          .filter((value) => commandRegistry.getByCategory(value).length > 0)
+          .filter((value) => commandRegistry.getVisibleByCategory(value).length > 0)
           .join(', ');
 
         await ctx.socket.sendMessage(
@@ -29,7 +29,7 @@ export const MenuCommand: Command = {
         return;
       }
 
-      const commands = commandRegistry.getByCategory(category);
+      const commands = commandRegistry.getVisibleByCategory(category);
       let text = `📱 WhatsApp Hybrid Bot\n━━━ ❖ ${category} ❖ ━━━\n`;
 
       for (const cmd of commands) {
@@ -53,7 +53,7 @@ export const MenuCommand: Command = {
     let text = `*CrystalDust's WhatsApp Bot*\nChoose a sub-category to view its commands by typing "${config.BOT_PREFIX}menu <sub-category>"\n`;
 
     for (const category of categories) {
-      if (commandRegistry.getByCategory(category).length > 0) {
+      if (commandRegistry.getVisibleByCategory(category).length > 0) {
         text += `━━━ ❖ ${category} ❖ ━━━\n`;
       }
     }
