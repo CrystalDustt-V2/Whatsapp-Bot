@@ -24,6 +24,8 @@ export enum CommandCategory {
   UTILITY = 'Utility',
   DOWNLOADER = 'Downloader',
   STICKER = 'Sticker',
+  PACK_SYSTEM = 'Pack System',
+  PACK_USAGE = 'Pack Usage',
   GROUP = 'Group',
   FUN = 'Fun',
   ECONOMY = 'Economy',

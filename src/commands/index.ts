@@ -23,6 +23,7 @@ import { IslamicCommands } from './islamic';
 import { EconomyCommands } from './economy';
 import { MarketplaceCommands } from './marketplace';
 import { AnonymousCommands } from './anonymous';
+import { PackCommands } from './packs';
 import { TikTokCommand, TikTokAudioCommand } from './tiktok';
 import {
   PlayCommand,
@@ -191,6 +192,9 @@ export function loadCommands(): void {
     commandRegistry.register(command);
   }
   for (const command of AnonymousCommands) {
+    commandRegistry.register(command);
+  }
+  for (const command of PackCommands) {
     commandRegistry.register(command);
   }
   commandRegistry.register(TikTokCommand);
