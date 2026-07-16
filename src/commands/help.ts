@@ -1,6 +1,7 @@
 import { Command, CommandCategory } from '../types';
 import { commandRegistry } from '../core/command-registry';
 import config from '../config';
+import { formatCommandHelp } from '../core/command-help';
 
 export const HelpCommand: Command = {
   name: 'help',
@@ -14,14 +15,9 @@ export const HelpCommand: Command = {
     if (cmdName) {
       const cmd = commandRegistry.get(cmdName);
       if (cmd) {
-        let text = `📋 *${cmd.name}*\n`;
-        text += `📝 ${cmd.description || 'No description'}\n`;
-        if (cmd.aliases) text += `🔗 Aliases: ${cmd.aliases.join(', ')}\n`;
-        if (cmd.usage) text += `💡 Usage: ${config.BOT_PREFIX}${cmd.usage}\n`;
-
         await ctx.socket.sendMessage(
           ctx.message.key.remoteJid!,
-          { text },
+          { text: formatCommandHelp(cmd) },
           { quoted: ctx.message }
         );
         return;

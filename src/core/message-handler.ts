@@ -2,6 +2,7 @@ import type { WASocket, WAMessage, WAMessageKey, WAMessageUpdate, proto } from '
 import logger from './logger';
 import config from '../config';
 import { commandRegistry } from './command-registry';
+import { formatCommandHelp } from './command-help';
 import type { BotContext } from '../types';
 import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
 import {
@@ -221,6 +222,11 @@ export class MessageHandler {
       }
 
       markMessageSeen(messageKey);
+
+      if (command.name !== 'ai' && args[0]?.toLowerCase() === 'help') {
+        await this.reply(message, formatCommandHelp(command));
+        return;
+      }
 
       logger.info(
         logContext,
