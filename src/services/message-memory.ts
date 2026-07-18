@@ -208,11 +208,12 @@ export function recordAiMemoryMessage(
   }
 }
 
-export function readAiMemoryContext(chatJid: string): string {
+export function readAiMemoryContext(chatJid: string, maxChars = 3000): string {
   if (!config.AI_MEMORY_ENABLED || !chatJid) return '';
 
   const entries = readMemoryEntries().filter((entry) => entry.chatJid === chatJid).slice(-memoryLimit());
   if (!entries.length) return '';
+  const limit = boundedNumber(maxChars, 3000, 500, 20000);
 
   const people = new Map<string, AiMemoryEntry>();
   for (const entry of entries) {
@@ -222,7 +223,16 @@ export function readAiMemoryContext(chatJid: string): string {
   const peopleLines = Array.from(people.values())
     .slice(-30)
     .map((entry) => `- ${entry.senderName}${entry.senderNumber ? ` (${entry.senderNumber})` : ''}`);
-  const messageLines = entries.map((entry) => `[${entry.ts}] ${entry.senderName}: ${entry.text}`);
+  const peopleBlock = `Known people in this chat:\n${peopleLines.join('\n')}`;
+  const messageLines: string[] = [];
+  let used = peopleBlock.length + '\n\nRecent messages in this chat:\n'.length;
 
-  return `Known people in this chat:\n${peopleLines.join('\n')}\n\nRecent messages in this chat:\n${messageLines.join('\n')}`;
+  for (const entry of entries.slice().reverse()) {
+    const line = `[${entry.ts}] ${entry.senderName}: ${entry.text}`;
+    if (used + line.length + 1 > limit) break;
+    messageLines.unshift(line);
+    used += line.length + 1;
+  }
+
+  return `${peopleBlock}\n\nRecent messages in this chat:\n${messageLines.join('\n')}`;
 }

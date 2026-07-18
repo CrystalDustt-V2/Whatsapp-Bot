@@ -51,6 +51,9 @@ const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || (IS_EMBEDDING_GEMINI
 const AI_EMBEDDING_MODEL = config.AI_EMBEDDING_MODEL;
 const AI_EMBEDDING_ENDPOINT = config.AI_EMBEDDING_ENDPOINT || '/embeddings';
 const MAX_MEMORY_MESSAGES = 12;
+const MAX_CHAT_MEMORY_CHARS = 2000;
+const MAX_PROMPT_MEMORY_CHARS = 3000;
+const MAX_PROMPT_COMMANDS = 24;
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 const chatMemory = new Map<string, ChatMessage[]>();
 const puterAI = createPuterAIService({
@@ -433,12 +436,53 @@ async function replyText(ctx: BotContext, text: string): Promise<void> {
   );
 }
 
-function commandList(): string {
-  return commandRegistry
+function promptSnippet(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max)}\n...[truncated]` : value;
+}
+
+function commandWords(value: string): string[] {
+  return value.toLowerCase().match(/[a-z0-9-]{3,}/g) || [];
+}
+
+function shouldIncludeCommandCatalog(input: string): boolean {
+  return explicitCommandToolRequest(input) || /\b(commands?|menus?|help|features?|tools?|download|search|play|music|song|sticker|convert|translate|lyrics|deleted|pack)\b/i.test(input);
+}
+
+function commandScore(command: Command, words: string[], input: string): number {
+  const names = [command.name, ...(command.aliases || [])].map((name) => name.toLowerCase());
+  if (names.some((name) => input.includes(name))) return 100;
+
+  const haystack = `${command.usage || ''} ${command.description || ''} ${command.category}`.toLowerCase();
+  return words.reduce((score, word) => score + (haystack.includes(word) ? 1 : 0), 0);
+}
+
+function commandList(input: string): string {
+  if (!shouldIncludeCommandCatalog(input)) return '';
+
+  const lower = input.toLowerCase();
+  const words = commandWords(lower);
+  const fallback = new Set(['menu', 'search', 'help', 'sticker', 'play', 'tiktok', 'deleted', 'pack']);
+  const scored = commandRegistry
     .getVisibleAll()
     .filter((command) => command.name !== 'ai')
-    .map((command) => `${config.BOT_PREFIX}${command.usage || command.name} - ${command.description || command.category}`)
+    .map((command) => ({ command, score: commandScore(command, words, lower) }))
+    .filter((item) => item.score > 0 || fallback.has(item.command.name))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_PROMPT_COMMANDS)
+    .map(({ command }) => `- ${config.BOT_PREFIX}${command.usage || command.name}: ${command.description || command.category}`)
     .join('\n');
+
+  return scored;
+}
+
+function shouldIncludeSavedMemory(input: string): boolean {
+  return /\b(remember|earlier|previous|before|history|chat|messages?|context|mentioned|said|told|profile|number|who (?:is|was|are)|what did)\b/i.test(input);
+}
+
+function compactMemoryMessage(message: ChatMessage): ChatMessage {
+  return typeof message.content === 'string'
+    ? { ...message, content: promptSnippet(message.content, MAX_CHAT_MEMORY_CHARS) }
+    : message;
 }
 
 function memoryKey(ctx: BotContext): string {
@@ -447,7 +491,7 @@ function memoryKey(ctx: BotContext): string {
 
 function remember(ctx: BotContext, ...messages: ChatMessage[]): void {
   const key = memoryKey(ctx);
-  const next = [...(chatMemory.get(key) || []), ...messages].slice(-MAX_MEMORY_MESSAGES);
+  const next = [...(chatMemory.get(key) || []), ...messages.map(compactMemoryMessage)].slice(-MAX_MEMORY_MESSAGES);
   chatMemory.set(key, next);
 }
 
@@ -1042,11 +1086,11 @@ export const AiCommand: Command = {
         return;
       }
 
-      const savedMemory = readAiMemoryContext(ctx.message.key.remoteJid || '');
-      const messages: ChatMessage[] = [
-        {
-          role: 'system',
-          content: `You are CrystalDust V0, a helpful WhatsApp assistant made by CrystalDust. Default to concise text replies.
+      const savedMemory = shouldIncludeSavedMemory(input)
+        ? readAiMemoryContext(ctx.message.key.remoteJid || '', MAX_PROMPT_MEMORY_CHARS)
+        : '';
+      const relevantCommands = commandList(input);
+      const systemPrompt = `You are CrystalDust V0, a helpful WhatsApp assistant made by CrystalDust. Default to concise text replies.
 Do not generate images, stickers, audio, voice, embeddings, or run bot commands unless the user explicitly asks for that exact kind of output. Simple questions, greetings, explanations, opinions, jokes, recommendations, and normal chat must be answered as plain text only.
 Use generate_image only for explicit image, drawing, picture, sticker, logo, illustration, or visual creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio only for explicit audio, speech, voice, TTS, or sound requests. Use embed_text only for explicit embedding, vector, or semantic similarity requests. Use run_bot_command only when an existing bot command clearly matches the user's requested bot action. Use fetch_url when the user asks you to inspect or send a public URL. If unsure, ask a short text clarification. Never run ai.
 Do not select image or audio output just because the selected model supports it; modality must come from the user's explicit request.
@@ -1057,9 +1101,23 @@ ${IS_GEMINI ? 'Gemini-specific rule: do not emit native functionCall parts. Use 
 Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.
 Use saved chat memory only as background context, and do not claim certainty when the memory is incomplete.
 ${savedMemory ? `\nSaved chat memory:\n${savedMemory}\n` : ''}
+${relevantCommands ? `\nRelevant bot commands:\n${relevantCommands}` : '\nFor command discovery, use run_bot_command with menu, search, or help only when the user explicitly asks.'}`;
 
-Available commands:
-${commandList()}`,
+      aiDebug(
+        {
+          inputChars: input.length,
+          systemPromptChars: systemPrompt.length,
+          savedMemoryChars: savedMemory.length,
+          commandCatalogChars: relevantCommands.length,
+          historyMessages: chatMemory.get(memoryKey(ctx))?.length || 0,
+        },
+        'prompt prepared'
+      );
+
+      const messages: ChatMessage[] = [
+        {
+          role: 'system',
+          content: systemPrompt,
         },
         ...(chatMemory.get(memoryKey(ctx)) || []),
         { role: 'user', content: input },
