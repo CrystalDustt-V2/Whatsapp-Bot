@@ -36,6 +36,10 @@ export {
   DedupeLinesCommand as dedupe,
   ExtractUrlsCommand as extracturls,
   Rot13Command as rot13,
+  HtmlEscapeCommand as htmlescape,
+  HtmlUnescapeCommand as htmlunescape,
+  LoremCommand as lorem,
+  CharInfoCommand as charinfo,
 } from './text-extra';
 export {
   IpLookupCommand as iplookup,

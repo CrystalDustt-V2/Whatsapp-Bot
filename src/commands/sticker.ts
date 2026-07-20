@@ -38,8 +38,17 @@ const SUBCOMMANDS: Record<string, Command> = {
   sbrat: SbratStickerCommand,
 };
 
-function parseStickerArgs(rawArgs = ''): { shape?: 'circle' | 'rounded'; metadata: string } {
+function parseLeadingOptions(rawArgs = ''): { rawArgs: string; noCrop: boolean } {
   const trimmed = rawArgs.trim();
+  const noCrop = /^--no-?crop(?:\s|$)/i.test(trimmed);
+  return {
+    noCrop,
+    rawArgs: noCrop ? trimmed.replace(/^--no-?crop(?:\s+|$)/i, '').trim() : trimmed,
+  };
+}
+
+function parseStickerArgs(rawArgs = ''): { shape?: 'circle' | 'rounded'; metadata: string } {
+  const trimmed = parseLeadingOptions(rawArgs).rawArgs;
   const [first = ''] = trimmed.split(/\s+/, 1);
   const shape = SHAPES.has(first.toLowerCase()) ? first.toLowerCase() as 'circle' | 'rounded' : undefined;
   const metadata = (shape ? trimmed.slice(first.length) : trimmed).trim().replace(/\s+/g, ' ').slice(0, 64);
@@ -55,7 +64,7 @@ function subcommandContext(ctx: BotContext, rawArgs: string): BotContext {
 }
 
 async function runSubcommand(ctx: BotContext): Promise<boolean> {
-  const raw = (ctx.rawArgs || ctx.args.join(' ')).trim();
+  const raw = parseLeadingOptions(ctx.rawArgs || ctx.args.join(' ')).rawArgs;
   const [first = ''] = raw.split(/\s+/, 1);
   const effect = EFFECTS[first.toLowerCase()];
   if (effect) {
@@ -89,7 +98,7 @@ export const StickerCommand: Command = {
   aliases: ['s', 'stiker'],
   category: CommandCategory.STICKER,
   description: 'Create stickers and run sticker effects',
-  usage: 'sticker [metadata]|<bw|sepia|vintage|cartoon|glitch|border|text|meme|url|revert|brat> ...',
+  usage: 'sticker [--nocrop] [metadata]|<bw|sepia|vintage|cartoon|glitch|border|text|meme|url|revert|brat> ...',
   async execute(ctx) {
     if (await runSubcommand(ctx)) return;
 
@@ -129,6 +138,7 @@ export const StickerCommand: Command = {
       const buffer = Buffer.concat(chunks);
 
       let processedBuffer: Buffer;
+      const { noCrop } = parseLeadingOptions(ctx.rawArgs);
       const { shape, metadata } = parseStickerArgs(ctx.rawArgs);
       const options = { packName: metadata, author: STICKER_WATERMARK };
 
@@ -136,7 +146,7 @@ export const StickerCommand: Command = {
         if (shape) {
           processedBuffer = await stickerEngine.createShapedSticker(buffer, shape, options);
         } else {
-          processedBuffer = await stickerEngine.createSticker(buffer, { ...options, smartCrop: true });
+          processedBuffer = await stickerEngine.createSticker(buffer, { ...options, smartCrop: !noCrop });
         }
       } else {
         processedBuffer = buffer;

@@ -12,10 +12,23 @@ import Base64Command from './base64';
 import { CoreExtraCommands } from './core-extra';
 import {
   AdminListCommand,
+  ClearWarningsCommand,
+  DeleteMessageCommand,
+  DemoteCommand,
+  GroupLinkCommand,
   GroupInfoCommand,
+  GroupModeCommand,
   GroupStatsCommand,
+  KickCommand,
   MemberListCommand,
+  PromoteCommand,
+  ResetLinkCommand,
+  SetDescriptionCommand,
+  SetSubjectCommand,
   TagAllCommand,
+  UnwarnCommand,
+  WarnCommand,
+  WarningsCommand,
 } from './group';
 import { SearchCommands } from './search';
 import { SocialCommands } from './social';
@@ -71,6 +84,10 @@ import {
   dedupe,
   extracturls,
   rot13,
+  htmlescape,
+  htmlunescape,
+  lorem,
+  charinfo,
   iplookup,
   dns,
   httpcheck,
@@ -175,6 +192,19 @@ export function loadCommands(): void {
   commandRegistry.register(AdminListCommand);
   commandRegistry.register(MemberListCommand);
   commandRegistry.register(GroupStatsCommand);
+  commandRegistry.register(KickCommand);
+  commandRegistry.register(PromoteCommand);
+  commandRegistry.register(DemoteCommand);
+  commandRegistry.register(GroupModeCommand);
+  commandRegistry.register(GroupLinkCommand);
+  commandRegistry.register(ResetLinkCommand);
+  commandRegistry.register(SetSubjectCommand);
+  commandRegistry.register(SetDescriptionCommand);
+  commandRegistry.register(DeleteMessageCommand);
+  commandRegistry.register(WarnCommand);
+  commandRegistry.register(UnwarnCommand);
+  commandRegistry.register(WarningsCommand);
+  commandRegistry.register(ClearWarningsCommand);
   commandRegistry.register(TagAllCommand);
   for (const command of SearchCommands) {
     commandRegistry.register(command);
@@ -242,6 +272,10 @@ export function loadCommands(): void {
   commandRegistry.register(dedupe);
   commandRegistry.register(extracturls);
   commandRegistry.register(rot13);
+  commandRegistry.register(htmlescape);
+  commandRegistry.register(htmlunescape);
+  commandRegistry.register(lorem);
+  commandRegistry.register(charinfo);
   commandRegistry.register(iplookup);
   commandRegistry.register(dns);
   commandRegistry.register(httpcheck);
