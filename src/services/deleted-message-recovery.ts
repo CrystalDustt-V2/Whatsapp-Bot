@@ -560,12 +560,64 @@ export async function readDeletedMessageMedia(record: DeletedMessageRecord): Pro
   return fs.readFileSync(media.path);
 }
 
-export function listDeletedMessages(chatJid: string, limit = 10): DeletedMessageRecord[] {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED || !chatJid) return [];
+export type DeletedChatSummary = {
+  chatJid: string;
+  count: number;
+  lastDeletedAt: string;
+  lastSenderName: string;
+};
+
+export function listAllDeletedMessages(limit = 25): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+
+  return loadState()
+    .deleted
+    .slice(-boundedNumber(limit, 25, 1, 100))
+    .reverse();
+}
+
+export function listDeletedMessages(chatJid?: string, limit = 10): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+  if (!chatJid || chatJid === 'all' || chatJid === 'global') {
+    return listAllDeletedMessages(limit);
+  }
 
   return loadState()
     .deleted
     .filter((item) => item.chatJid === chatJid)
     .slice(-boundedNumber(limit, 10, 1, 50))
     .reverse();
+}
+
+export function listDeletedChats(): DeletedChatSummary[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+
+  const state = loadState();
+  const map = new Map<string, { count: number; lastDeletedAt: string; lastSenderName: string }>();
+
+  for (const item of state.deleted) {
+    const existing = map.get(item.chatJid);
+    if (existing) {
+      existing.count += 1;
+      if (new Date(item.deletedAt).getTime() > new Date(existing.lastDeletedAt).getTime()) {
+        existing.lastDeletedAt = item.deletedAt;
+        existing.lastSenderName = item.senderName;
+      }
+    } else {
+      map.set(item.chatJid, {
+        count: 1,
+        lastDeletedAt: item.deletedAt,
+        lastSenderName: item.senderName,
+      });
+    }
+  }
+
+  return Array.from(map.entries())
+    .map(([chatJid, data]) => ({
+      chatJid,
+      count: data.count,
+      lastDeletedAt: data.lastDeletedAt,
+      lastSenderName: data.lastSenderName,
+    }))
+    .sort((a, b) => new Date(b.lastDeletedAt).getTime() - new Date(a.lastDeletedAt).getTime());
 }

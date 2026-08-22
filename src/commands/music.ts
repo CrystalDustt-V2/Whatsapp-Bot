@@ -185,10 +185,16 @@ async function spotifyMusicSources(input: string, url?: URL | null): Promise<Mus
 
   return [
     {
-      label: platforms.spotify.name,
+      label: 'youtube-music',
       input: platforms.youtube.searchInput(input),
       query: input,
       audioSourceLabel: 'youtube-music',
+    },
+    {
+      label: 'soundcloud',
+      input: platforms.soundcloud.searchInput(input),
+      query: input,
+      audioSourceLabel: 'soundcloud',
     },
   ];
 }
@@ -319,38 +325,50 @@ function spotifyTrackIdFromUrl(url: URL): string | null {
   return type === 'track' && /^[A-Za-z0-9]+$/.test(id || '') ? id : null;
 }
 
+function isLikelyValidSpotifyCredential(val?: string): boolean {
+  if (!val) return false;
+  const clean = val.trim();
+  return clean.length >= 16 && !clean.includes('your_') && !clean.includes('placeholder') && !clean.includes('example');
+}
+
 async function spotifyAccessToken(): Promise<string | null> {
   const clientId = config.SPOTIFY_CLIENT_ID?.trim();
   const clientSecret = config.SPOTIFY_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) return null;
+  if (!isLikelyValidSpotifyCredential(clientId) || !isLikelyValidSpotifyCredential(clientSecret)) {
+    return null;
+  }
 
   if (spotifyToken && spotifyToken.expiresAt > Date.now() + 30_000) {
     return spotifyToken.value;
   }
 
-  const response = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({ grant_type: 'client_credentials' }),
-  });
+  try {
+    const response = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ grant_type: 'client_credentials' }),
+    });
 
-  if (!response.ok) {
-    logger.warn({ status: response.status }, 'Spotify token request failed');
+    if (!response.ok) {
+      logger.info({ status: response.status }, 'Spotify client credentials rejected, falling back to zero-key resolution');
+      return null;
+    }
+
+    const data = (await response.json()) as { access_token?: string; expires_in?: number };
+    if (!data.access_token) return null;
+
+    spotifyToken = {
+      value: data.access_token,
+      expiresAt: Date.now() + Math.max(60, data.expires_in || 3600) * 1000,
+    };
+
+    return spotifyToken.value;
+  } catch {
     return null;
   }
-
-  const data = await response.json() as { access_token?: string; expires_in?: number };
-  if (!data.access_token) return null;
-
-  spotifyToken = {
-    value: data.access_token,
-    expiresAt: Date.now() + Math.max(60, data.expires_in || 3600) * 1000,
-  };
-
-  return spotifyToken.value;
 }
 
 async function spotifyApi(path: string): Promise<Record<string, unknown> | null> {
