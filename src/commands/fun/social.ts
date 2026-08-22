@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import config from '../../config';
 import { randomData } from '../../services/random-data';
+import aiService from '../../services/ai-service';
 import { Command, CommandCategory } from '../../types';
 
 function stablePercent(input: string): number {
@@ -92,13 +93,38 @@ export const CompatibilityCommand: Command = {
 
 export const RoastCommand: Command = {
   name: 'roast',
-  aliases: ['burn'],
+  aliases: ['burn', 'insult'],
   category: CommandCategory.FUN,
-  description: 'Get a random light roast',
-  usage: 'roast [name]',
+  description: 'Get a funny or savage roast',
+  usage: 'roast [target]',
   async execute(ctx) {
     const target = ctx.args.join(' ').trim();
-    await ctx.reply(`${target ? `${target}, ` : ''}${randomData.getRoast()}`);
+
+    // 1. Try AI roast generation (personalized if target is provided)
+    try {
+      const prompt = target
+        ? `Generate 1 short, witty, comedic, and savage roast aimed at "${target}". Keep it lighthearted and safe for WhatsApp chats. Return ONLY the roast.`
+        : `Generate 1 short, witty, comedic roast. Keep it lighthearted and safe for WhatsApp chats. Return ONLY the roast.`;
+
+      const aiRes = await aiService.chat(
+        [
+          { role: 'system', content: 'You are a stand-up comedian doing a roast session. Return only 1 short roast without preamble.' },
+          { role: 'user', content: prompt },
+        ],
+        { maxTokens: 100, temperature: 0.9 }
+      );
+
+      const roast = aiRes.text.trim().replace(/^["']|["']$/g, '');
+      if (roast && roast.length > 5) {
+        await ctx.reply(`🔥 *Roast:*\n\n${roast}`);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    // 2. Fallback to local dataset
+    await ctx.reply(`🔥 *Roast:*\n\n${target ? `${target}, ` : ''}${randomData.getRoast()}`);
   },
 };
 

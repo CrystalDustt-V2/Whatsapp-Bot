@@ -41,6 +41,7 @@ import { TikTokCommand, TikTokAudioCommand } from './tiktok';
 import {
   PlayCommand,
   YouTubeCommand,
+  YouTubeVideoCommand,
   SpotifyCommand,
   SoundCloudCommand,
   NewgroundsCommand,
@@ -231,6 +232,7 @@ export function loadCommands(): void {
   commandRegistry.register(TikTokAudioCommand);
   commandRegistry.register(PlayCommand);
   commandRegistry.register(YouTubeCommand);
+  commandRegistry.register(YouTubeVideoCommand);
   commandRegistry.register(SpotifyCommand);
   commandRegistry.register(SoundCloudCommand);
   commandRegistry.register(NewgroundsCommand);

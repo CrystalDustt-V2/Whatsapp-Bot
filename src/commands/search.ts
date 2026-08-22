@@ -1,80 +1,5 @@
+import { searchYtDlp } from '../services/tiktok-downloader';
 import { Command, CommandCategory } from '../types';
-
-type SearchProvider = {
-  name: string;
-  aliases: string[];
-  description: string;
-  url(query: string): string;
-};
-
-const providers: SearchProvider[] = [
-  {
-    name: 'google',
-    aliases: ['g'],
-    description: 'Search Google',
-    url: (query) => `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'imagesearch',
-    aliases: ['image', 'imgsearch'],
-    description: 'Search Google Images',
-    url: (query) => `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'ytsearch',
-    aliases: ['youtubesearch'],
-    description: 'Search YouTube',
-    url: (query) => `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'wikipedia',
-    aliases: ['wiki'],
-    description: 'Search Wikipedia',
-    url: (query) => `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'github',
-    aliases: ['gh'],
-    description: 'Search GitHub',
-    url: (query) => `https://github.com/search?q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'pinterest',
-    aliases: ['pin'],
-    description: 'Search Pinterest',
-    url: (query) => `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'apksearch',
-    aliases: ['apk'],
-    description: 'Search APKPure',
-    url: (query) => `https://apkpure.com/search?q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'recipe',
-    aliases: ['recipes'],
-    description: 'Search recipes',
-    url: (query) => `https://www.allrecipes.com/search?q=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'wallpaper',
-    aliases: ['wp'],
-    description: 'Search wallpaper images',
-    url: (query) => `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${query} wallpaper`)}`,
-  },
-  {
-    name: 'mathsolver',
-    aliases: ['solve'],
-    description: 'Open a math solver search',
-    url: (query) => `https://www.wolframalpha.com/input?i=${encodeURIComponent(query)}`,
-  },
-  {
-    name: 'syntax',
-    aliases: ['docs', 'devdocs'],
-    description: 'Search programming syntax docs',
-    url: (query) => `https://devdocs.io/#q=${encodeURIComponent(query)}`,
-  },
-];
 
 type GeniusSong = {
   title: string;
@@ -149,25 +74,6 @@ const PUBLIC_DOMAIN_TITLE_ALLOWLIST = new Set([
 
 const PUBLIC_DOMAIN_ARTIST_MARKERS = ['traditional', 'public domain'];
 
-function createSearchCommand(provider: SearchProvider): Command {
-  return {
-    name: provider.name,
-    aliases: provider.aliases,
-    category: CommandCategory.SEARCH,
-    description: provider.description,
-    usage: `${provider.name} <query>`,
-    async execute(ctx) {
-      const query = ctx.args.join(' ').trim();
-      if (!query) {
-        await ctx.reply(`Usage: .${provider.name} <query>`);
-        return;
-      }
-
-      await ctx.reply(`${provider.name}: ${provider.url(query)}`);
-    },
-  };
-}
-
 function getObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
@@ -211,6 +117,530 @@ function htmlToText(value: string): string {
     .trim();
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+async function fetchImageBuffer(url: string): Promise<Buffer | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0' },
+    });
+    if (!response.ok) return null;
+    return Buffer.from(await response.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJson(url: string, headers: Record<string, string> = {}): Promise<unknown> {
+  const response = await fetch(url, {
+    headers: {
+      accept: 'application/json,text/plain,*/*',
+      'user-agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0',
+      ...headers,
+    },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json() as Promise<unknown>;
+}
+
+async function fetchText(url: string, headers: Record<string, string> = {}): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      accept: 'text/html,text/plain,application/xhtml+xml,*/*',
+      'user-agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0',
+      ...headers,
+    },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
+export const GoogleSearchCommand: Command = {
+  name: 'google',
+  aliases: ['g', 'search', 'websearch'],
+  category: CommandCategory.SEARCH,
+  description: 'Search the web and return top result snippets',
+  usage: 'google <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .google <query>');
+      return;
+    }
+
+    try {
+      // Use DuckDuckGo HTML search for clean result snippets
+      const html = await fetchText(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      });
+
+      const results: { title: string; snippet: string; url: string }[] = [];
+      const blocks = html.split(/class="result__body/i).slice(1, 6);
+
+      for (const block of blocks) {
+        const titleMatch = block.match(/class="result__snippet[^>]*>([\s\S]*?)<\/a>/i) || block.match(/<a[^>]*class="result__url"[^>]*>([\s\S]*?)<\/a>/i);
+        const linkMatch = block.match(/class="result__url"[^>]*href="([^"]+)"/i) || block.match(/href="([^"]+)"/i);
+        const snippetMatch = block.match(/class="result__snippet[^>]*>([\s\S]*?)<\/a>/i);
+
+        let url = linkMatch?.[1]?.trim() || '';
+        if (url.includes('uddg=')) {
+          try {
+            const raw = new URL(`https://html.duckduckgo.com${url}`).searchParams.get('uddg');
+            if (raw) url = decodeURIComponent(raw);
+          } catch {
+            // Keep url
+          }
+        }
+
+        const title = htmlToText(titleMatch?.[1] || '').slice(0, 100);
+        const snippet = htmlToText(snippetMatch?.[1] || '').slice(0, 200);
+
+        if (title && url) {
+          results.push({ title, snippet, url });
+        }
+      }
+
+      if (results.length > 0) {
+        const text = `*Google Search Results for "${query}"*\n\n` +
+          results.map((r, i) => `${i + 1}. *${r.title}*\n${r.snippet ? `${r.snippet}\n` : ''}${r.url}`).join('\n\n');
+        await ctx.reply(text);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`*Google Search:*\nhttps://www.google.com/search?q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const ImageSearchCommand: Command = {
+  name: 'imagesearch',
+  aliases: ['image', 'imgsearch', 'img'],
+  category: CommandCategory.SEARCH,
+  description: 'Search and send matching images',
+  usage: 'imagesearch <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .imagesearch <query>');
+      return;
+    }
+
+    try {
+      await ctx.reply(`Searching image for "${query}"...`);
+      // Search Wallhaven / Unsplash
+      const data = getObject(await fetchJson(`https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(query)}&sorting=relevance`));
+      const items = getArray(data?.data);
+      const first = getObject(items[0]);
+      const imageUrl = getString(first?.path) || getString(first?.thumbs && getObject(first.thumbs)?.large);
+
+      if (imageUrl) {
+        const buffer = await fetchImageBuffer(imageUrl);
+        if (buffer) {
+          await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+            image: buffer,
+            caption: `*Image Search:* ${query}\nSource: Wallhaven`,
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
+    // Secondary fallback: Google image search URL
+    await ctx.reply(`Image search: https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const YouTubeSearchCommand: Command = {
+  name: 'ytsearch',
+  aliases: ['youtubesearch', 'yts'],
+  category: CommandCategory.SEARCH,
+  description: 'Search YouTube and return top video results with titles and links',
+  usage: 'ytsearch <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .ytsearch <query>');
+      return;
+    }
+
+    try {
+      await ctx.reply(`Searching YouTube for "${query}"...`);
+      const results = await searchYtDlp(`ytsearch5:${query}`, 5);
+
+      if (!results.length) {
+        await ctx.reply(`No YouTube videos found for "${query}".`);
+        return;
+      }
+
+      const lines = results.map((r, i) => {
+        const title = r.title || 'Untitled';
+        const uploader = r.uploader ? ` • ${r.uploader}` : '';
+        const duration = r.duration ? ` [${r.duration}]` : '';
+        const link = r.webpageUrl || (r.id ? `https://www.youtube.com/watch?v=${r.id}` : '');
+        return `${i + 1}. *${title}*${duration}\nChannel: ${r.uploader || 'Unknown'}\n${link}`;
+      });
+
+      await ctx.reply(`*YouTube Search Results for "${query}"*\n\n${lines.join('\n\n')}`);
+    } catch (err) {
+      await ctx.reply(`YouTube search: https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`);
+    }
+  },
+};
+
+export const WikipediaCommand: Command = {
+  name: 'wikipedia',
+  aliases: ['wiki', 'wikisearch'],
+  category: CommandCategory.SEARCH,
+  description: 'Search Wikipedia and return article summary with photo',
+  usage: 'wikipedia <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .wikipedia <topic>\nExample: .wikipedia Albert Einstein');
+      return;
+    }
+
+    try {
+      // First attempt: REST summary
+      let summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`;
+      let data = getObject(await fetchJson(summaryUrl).catch(() => null));
+
+      // Second attempt: OpenSearch to resolve exact title if direct match fails
+      if (!data || data.type === 'https://mediawiki.org/wiki/HyperSwitch/errors/not_found') {
+        const opensearch = getArray(await fetchJson(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=1&format=json`));
+        const matchedTitle = getString(getArray(opensearch[1])[0]);
+        if (matchedTitle) {
+          summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(matchedTitle)}`;
+          data = getObject(await fetchJson(summaryUrl).catch(() => null));
+        }
+      }
+
+      if (data && getString(data.title) && getString(data.extract)) {
+        const title = getString(data.title);
+        const description = getString(data.description);
+        const extract = getString(data.extract);
+        const pageUrl = getString(getObject(getObject(data.content_urls)?.desktop)?.page) || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+        const thumbnailUrl = getString(getObject(data.thumbnail)?.source);
+
+        const caption = [
+          `*${title}*`,
+          description ? `_${description}_\n` : undefined,
+          extract,
+          `\nRead more: ${pageUrl}`,
+        ].filter(Boolean).join('\n');
+
+        if (thumbnailUrl) {
+          const thumbnailBuffer = await fetchImageBuffer(thumbnailUrl);
+          if (thumbnailBuffer) {
+            await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+              image: thumbnailBuffer,
+              caption: caption.slice(0, 1000),
+            });
+            return;
+          }
+        }
+
+        await ctx.reply(caption.slice(0, 3000));
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Wikipedia: https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query)}`);
+  },
+};
+
+export const GitHubSearchCommand: Command = {
+  name: 'github',
+  aliases: ['gh', 'ghsearch'],
+  category: CommandCategory.SEARCH,
+  description: 'Search GitHub repositories with stars, forks, and language',
+  usage: 'github <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .github <repository or topic>\nExample: .github baileys');
+      return;
+    }
+
+    try {
+      const data = getObject(await fetchJson(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`, {
+        accept: 'application/vnd.github.v3+json',
+        'user-agent': 'WhatsAppHybridBot/1.0',
+      }));
+
+      const items = getArray(data?.items);
+      if (items.length > 0) {
+        const repos = items.slice(0, 5).map((item, index) => {
+          const repo = getObject(item);
+          const fullName = getString(repo?.full_name);
+          const description = getString(repo?.description) || 'No description';
+          const stars = Number(repo?.stargazers_count || 0).toLocaleString();
+          const forks = Number(repo?.forks_count || 0).toLocaleString();
+          const language = getString(repo?.language) || 'General';
+          const url = getString(repo?.html_url);
+
+          return `${index + 1}. *${fullName}* (⭐ ${stars} | 🍴 ${forks} | ${language})\n${description}\n${url}`;
+        });
+
+        await ctx.reply(`*GitHub Repositories for "${query}"*\n\n${repos.join('\n\n')}`);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`GitHub search: https://github.com/search?q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const WallpaperCommand: Command = {
+  name: 'wallpaper',
+  aliases: ['wp', 'wallpapers'],
+  category: CommandCategory.SEARCH,
+  description: 'Search and download HD wallpapers',
+  usage: 'wallpaper <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .wallpaper <topic>\nExample: .wallpaper cyberpunk');
+      return;
+    }
+
+    try {
+      await ctx.reply(`Searching wallpaper for "${query}"...`);
+      const data = getObject(await fetchJson(`https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(query)}&sorting=relevance`));
+      const items = getArray(data?.data);
+      const first = getObject(items[0]);
+      const imageUrl = getString(first?.path);
+      const resolution = getString(first?.resolution);
+
+      if (imageUrl) {
+        const buffer = await fetchImageBuffer(imageUrl);
+        if (buffer) {
+          await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+            image: buffer,
+            caption: `*Wallpaper: ${query}*${resolution ? `\nResolution: ${resolution}` : ''}\nSource: Wallhaven`,
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Wallpaper search: https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${query} wallpaper`)}`);
+  },
+};
+
+export const PinterestCommand: Command = {
+  name: 'pinterest',
+  aliases: ['pin', 'pinsearch'],
+  category: CommandCategory.SEARCH,
+  description: 'Search Pinterest and image ideas',
+  usage: 'pinterest <query>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .pinterest <query>');
+      return;
+    }
+
+    try {
+      const data = getObject(await fetchJson(`https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(query)}&categories=111&purity=100`));
+      const items = getArray(data?.data);
+      const first = getObject(items[0]);
+      const imageUrl = getString(first?.path) || getString(first?.thumbs && getObject(first.thumbs)?.large);
+
+      if (imageUrl) {
+        const buffer = await fetchImageBuffer(imageUrl);
+        if (buffer) {
+          await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+            image: buffer,
+            caption: `*Pinterest Idea:* ${query}\nLink: https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}`,
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Pinterest search: https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const RecipeSearchCommand: Command = {
+  name: 'recipe',
+  aliases: ['recipes', 'resep'],
+  category: CommandCategory.SEARCH,
+  description: 'Search recipes with full ingredients, instructions, and photo',
+  usage: 'recipe <food name>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .recipe <food name>\nExample: .recipe pasta\nExample: .recipe chicken');
+      return;
+    }
+
+    try {
+      const data = getObject(await fetchJson(`https://www.themealdb.com/api/json/v1/1/search.php?s=${encodeURIComponent(query)}`));
+      const meals = getArray(data?.meals);
+      const meal = getObject(meals[0]);
+
+      if (meal) {
+        const name = getString(meal.strMeal);
+        const category = getString(meal.strCategory);
+        const area = getString(meal.strArea);
+        const instructions = getString(meal.strInstructions);
+        const thumbUrl = getString(meal.strMealThumb);
+
+        // Collect ingredients
+        const ingredients: string[] = [];
+        for (let i = 1; i <= 20; i += 1) {
+          const ing = getString(meal[`strIngredient${i}`])?.trim();
+          const measure = getString(meal[`strMeasure${i}`])?.trim();
+          if (ing) {
+            ingredients.push(`- ${ing}${measure ? ` (${measure})` : ''}`);
+          }
+        }
+
+        const caption = [
+          `*${name}*`,
+          category && area ? `Category: ${category} | Origin: ${area}` : undefined,
+          `\n*Ingredients:*`,
+          ingredients.slice(0, 15).join('\n'),
+          `\n*Instructions:*`,
+          instructions.slice(0, 500) + (instructions.length > 500 ? '...' : ''),
+        ].filter(Boolean).join('\n');
+
+        if (thumbUrl) {
+          const photo = await fetchImageBuffer(thumbUrl);
+          if (photo) {
+            await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+              image: photo,
+              caption: caption.slice(0, 1000),
+            });
+            return;
+          }
+        }
+
+        await ctx.reply(caption.slice(0, 3000));
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Recipe search: https://www.allrecipes.com/search?q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const ApkSearchCommand: Command = {
+  name: 'apksearch',
+  aliases: ['apk', 'androidapp'],
+  category: CommandCategory.SEARCH,
+  description: 'Search Android APK packages and store details',
+  usage: 'apksearch <app name>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .apksearch <app name>\nExample: .apksearch whatsapp');
+      return;
+    }
+
+    try {
+      const data = getObject(await fetchJson(`https://search.f-droid.org/api/v1/packages?q=${encodeURIComponent(query)}`));
+      const packages = getArray(data?.packages);
+
+      if (packages.length > 0) {
+        const list = packages.slice(0, 4).map((p, i) => {
+          const pkg = getObject(p);
+          const name = getString(pkg?.name) || getString(pkg?.packageName);
+          const summary = getString(pkg?.summary) || 'Android Application';
+          const version = getString(pkg?.suggestedVersionName) || 'Latest';
+          const pkgId = getString(pkg?.packageName);
+          const link = `https://f-droid.org/packages/${pkgId}/`;
+          return `${i + 1}. *${name}* (v${version})\n${summary}\n${link}`;
+        });
+
+        await ctx.reply(`*APK Search Results for "${query}"*\n\n${list.join('\n\n')}`);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`APK search:\n- APKPure: https://apkpure.com/search?q=${encodeURIComponent(query)}\n- Google Play: https://play.google.com/store/search?q=${encodeURIComponent(query)}&c=apps`);
+  },
+};
+
+export const SyntaxGuideCommand: Command = {
+  name: 'syntax',
+  aliases: ['docs', 'devdocs', 'cheat'],
+  category: CommandCategory.SEARCH,
+  description: 'Look up code syntax and developer cheatsheets',
+  usage: 'syntax <language/topic>',
+  async execute(ctx) {
+    const query = ctx.args.join(' ').trim();
+    if (!query) {
+      await ctx.reply('Usage: .syntax <language/topic>\nExample: .syntax javascript array\nExample: .syntax python list');
+      return;
+    }
+
+    try {
+      const formattedQuery = query.replace(/\s+/g, '/');
+      const text = await fetchText(`https://cheat.sh/${encodeURIComponent(formattedQuery)}?T`, {
+        'user-agent': 'curl/7.68.0',
+      });
+
+      const clean = stripAnsi(text).trim();
+      if (clean && !clean.includes('Unknown topic') && !clean.includes('404 NOT FOUND')) {
+        await ctx.reply(`*Syntax / Cheatsheet: ${query}*\n\n\`\`\`\n${clean.slice(0, 2500)}\n\`\`\``);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Developer docs: https://devdocs.io/#q=${encodeURIComponent(query)}`);
+  },
+};
+
+export const MathSolverCommand: Command = {
+  name: 'mathsolver',
+  aliases: ['solve', 'solvemath'],
+  category: CommandCategory.SEARCH,
+  description: 'Solve mathematical expressions and calculations',
+  usage: 'mathsolver <expression>',
+  async execute(ctx) {
+    const expression = ctx.args.join(' ').trim();
+    if (!expression) {
+      await ctx.reply('Usage: .mathsolver <math expression>\nExample: .mathsolver 2 * (5 + 3) ^ 2\nExample: .mathsolver sqrt(144) + sin(45 deg)');
+      return;
+    }
+
+    try {
+      const resultText = await fetchText(`https://api.mathjs.org/v4/?expr=${encodeURIComponent(expression)}`);
+      if (resultText && !resultText.toLowerCase().includes('error')) {
+        await ctx.reply(`*Math Solution*\nExpression: ${expression}\nResult: *${resultText.trim()}*`);
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    await ctx.reply(`Math solver: https://www.wolframalpha.com/input?i=${encodeURIComponent(expression)}`);
+  },
+};
+
 function firstWords(value: string, maxWords: number): string {
   return value
     .replace(/\s+/g, ' ')
@@ -219,28 +649,6 @@ function firstWords(value: string, maxWords: number): string {
     .filter(Boolean)
     .slice(0, maxWords)
     .join(' ');
-}
-
-async function fetchJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    headers: {
-      accept: 'application/json,text/plain,*/*',
-      'user-agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0',
-    },
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json() as Promise<unknown>;
-}
-
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      accept: 'text/html,application/xhtml+xml,*/*',
-      'user-agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0',
-    },
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
 }
 
 async function searchGeniusSong(query: string): Promise<GeniusSong | null> {
@@ -506,7 +914,17 @@ export const TranslateCommand: Command = {
 };
 
 export const SearchCommands = [
-  ...providers.map(createSearchCommand),
+  GoogleSearchCommand,
+  ImageSearchCommand,
+  YouTubeSearchCommand,
+  WikipediaCommand,
+  GitHubSearchCommand,
+  WallpaperCommand,
+  PinterestCommand,
+  RecipeSearchCommand,
+  ApkSearchCommand,
+  SyntaxGuideCommand,
+  MathSolverCommand,
   LyricsCommand,
   TranslateCommand,
 ];

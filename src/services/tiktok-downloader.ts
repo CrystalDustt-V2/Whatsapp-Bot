@@ -202,28 +202,49 @@ function audioMimeType(fileName: string): string {
   return 'audio/mpeg';
 }
 
-export async function downloadYtDlpVideo(url: string): Promise<Buffer> {
+export type DownloadedVideo = {
+  buffer: Buffer;
+  mimetype: string;
+  info?: DownloadedMediaInfo;
+};
+
+export async function downloadYtDlpVideoFile(url: string): Promise<DownloadedVideo> {
   const dir = await mkdtemp(path.join(tmpdir(), 'media-video-'));
   const output = path.join(dir, 'video.%(ext)s');
 
   try {
-    await runYtDlp([
+    const stdout = await runYtDlp([
       '--no-playlist',
       '--max-filesize',
       `${MAX_VIDEO_BYTES}`,
       '-f',
-      'bestvideo*+bestaudio/best',
+      'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
       '--merge-output-format',
       'mp4',
+      '--print',
+      'after_move:__BOT_INFO_TITLE__%(title)s',
+      '--print',
+      'after_move:__BOT_INFO_UPLOADER__%(uploader)s',
+      '--print',
+      'after_move:__BOT_INFO_DURATION__%(duration_string)s',
+      '--print',
+      'after_move:__BOT_INFO_URL__%(webpage_url)s',
+      '--print',
+      'after_move:__BOT_INFO_EXTRACTOR__%(extractor_key)s',
       '-o',
       output,
       url,
     ]);
 
-    return (await readDownloadedFile(dir, 'video.', MAX_VIDEO_BYTES, 'Video')).buffer;
+    const file = await readDownloadedFile(dir, 'video.', MAX_VIDEO_BYTES, 'Video');
+    return { buffer: file.buffer, mimetype: 'video/mp4', info: parseYtDlpInfo(stdout) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+export async function downloadYtDlpVideo(url: string): Promise<Buffer> {
+  return (await downloadYtDlpVideoFile(url)).buffer;
 }
 
 export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAudio> {
@@ -264,5 +285,6 @@ export async function downloadYtDlpAudio(url: string): Promise<Buffer> {
 }
 
 export const downloadTikTokVideo = downloadYtDlpVideo;
+export const downloadTikTokVideoFile = downloadYtDlpVideoFile;
 export const downloadTikTokAudio = downloadYtDlpAudio;
 export const downloadTikTokAudioFile = downloadYtDlpAudioFile;

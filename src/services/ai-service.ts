@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
 
 import logger from '../core/logger';
+import config from '../config';
 
 export type AIServiceRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -605,3 +606,17 @@ export class PuterAIService implements AIService {
 export function createPuterAIService(options: PuterServiceOptions): AIService {
   return new PuterAIService(options);
 }
+
+export const aiService = createPuterAIService({
+  authToken: config.PUTER_AUTH_TOKEN,
+  chatModel: config.AI_MODEL || 'claude-3-5-sonnet',
+  imageModel: config.AI_IMAGE_MODEL,
+  ttsModel: config.AI_TTS_MODEL,
+  ttsVoice: config.AI_TTS_VOICE,
+  sttModel: config.AI_STT_MODEL,
+  timeoutMs: config.PUTER_TIMEOUT_MS,
+  retries: config.PUTER_RETRIES,
+});
+
+export default aiService;
+

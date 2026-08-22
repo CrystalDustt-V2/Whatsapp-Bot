@@ -1,6 +1,7 @@
 import { Command, CommandCategory } from '../types';
 import {
   downloadYtDlpAudioFile,
+  downloadYtDlpVideoFile,
   DownloadedAudio,
   DownloadedMediaInfo,
   searchYtDlp,
@@ -182,14 +183,10 @@ async function spotifyMusicSources(input: string, url?: URL | null): Promise<Mus
   const spotifyMatch = await spotifyMatchForRequest(input, url || undefined);
   if (spotifyMatch) return spotifyDownloadSources(spotifyMatch);
 
-  if (url && isSpotifyUrl(url)) {
-    throw new Error('Spotify metadata lookup failed');
-  }
-
   return [
     {
       label: platforms.spotify.name,
-      input: platforms.spotify.searchInput(input),
+      input: platforms.youtube.searchInput(input),
       query: input,
       audioSourceLabel: 'youtube-music',
     },
@@ -440,16 +437,46 @@ function spotifyRelevanceScore(query: string, match: SpotifyTrackMatch): number 
   return score;
 }
 
+async function fetchSpotifyOembedTrack(trackUrl: string): Promise<SpotifyTrackMatch | null> {
+  try {
+    const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(trackUrl)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 WhatsAppHybridBot/1.0' },
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { title?: string; thumbnail_url?: string };
+    if (!data.title) return null;
+
+    return {
+      title: data.title,
+      artists: '',
+      url: trackUrl,
+      query: data.title,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function spotifyMatchForRequest(input: string, url?: URL): Promise<SpotifyTrackMatch | null> {
   try {
     const trackId = url ? spotifyTrackIdFromUrl(url) : null;
-    if (trackId) return spotifyTrackById(trackId);
+    if (trackId) {
+      const byApi = await spotifyTrackById(trackId);
+      if (byApi) return byApi;
+      return fetchSpotifyOembedTrack(url!.toString());
+    }
     if (url && isSpotifyUrl(url)) {
+      const oembed = await fetchSpotifyOembedTrack(url.toString());
+      if (oembed) return oembed;
       const searchText = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
       return searchText ? searchSpotifyTrack(searchText) : null;
     }
     return searchSpotifyTrack(input);
   } catch (err) {
+    if (url && isSpotifyUrl(url)) {
+      const oembed = await fetchSpotifyOembedTrack(url.toString());
+      if (oembed) return oembed;
+    }
     logger.info({ err: errorSummary(err) }, 'Spotify metadata lookup failed');
     return null;
   }
@@ -568,3 +595,44 @@ export const YouTubeCommand = createMusicCommand(platforms.youtube);
 export const SpotifyCommand = createMusicCommand(platforms.spotify);
 export const SoundCloudCommand = createMusicCommand(platforms.soundcloud);
 export const NewgroundsCommand = createMusicCommand(platforms.newgrounds);
+
+export const YouTubeVideoCommand: Command = {
+  name: 'ytvideo',
+  aliases: ['ytmp4', 'youtubevideo', 'ytdl', 'ytv'],
+  category: CommandCategory.DOWNLOADER,
+  description: 'Download YouTube video as MP4',
+  usage: 'ytvideo <song/video name|url>',
+  async execute(ctx) {
+    const input = ctx.args.join(' ').trim();
+    if (!input) {
+      await ctx.reply('Usage: .ytvideo <song/video name or YouTube URL>');
+      return;
+    }
+
+    try {
+      await ctx.reply('Fetching and downloading YouTube video...');
+      let targetUrl = input;
+      if (!/^https?:\/\//i.test(input)) {
+        const results = await searchYtDlp(`ytsearch1:${input}`, 1);
+        targetUrl = results[0]?.webpageUrl || results[0]?.url || input;
+      }
+
+      const video = await downloadYtDlpVideoFile(targetUrl);
+      const lines = [
+        '*YouTube Video*',
+        video.info?.title ? `Title: ${video.info.title}` : undefined,
+        video.info?.uploader ? `Channel: ${video.info.uploader}` : undefined,
+        video.info?.duration ? `Duration: ${video.info.duration}` : undefined,
+      ].filter(Boolean);
+
+      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+        video: video.buffer,
+        mimetype: 'video/mp4',
+        caption: lines.join('\n'),
+      });
+    } catch (err) {
+      await ctx.reply(`Could not download that YouTube video. ${playFailure(err)}`);
+    }
+  },
+};
+
