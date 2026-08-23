@@ -16,12 +16,15 @@ const THEMES = {
 type BratTheme = keyof typeof THEMES;
 
 type Token =
-  | { type: 'text'; value: string }
-  | { type: 'space'; value: string }
-  | { type: 'emoji'; value: string };
+  | { type: 'text'; value: string; width?: number }
+  | { type: 'space'; value: string; width?: number }
+  | { type: 'emoji'; value: string; width?: number };
 
 const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
 const emojiBase64Cache = new Map<string, string>();
+const textMeasureCache = new Map<string, number>();
+
+const FONT_FAMILY = "Arial, 'Helvetica Neue', Helvetica, sans-serif";
 
 function isEmojiChar(char: string): boolean {
   return /\p{Extended_Pictographic}/u.test(char);
@@ -39,7 +42,7 @@ async function getEmojiBase64(emoji: string): Promise<string | null> {
 
   const url = `https://cdn.jsdelivr.net/gh/jdecked/twemoji@main/assets/72x72/${codePoints}.png`;
   try {
-    const res = await fetch(url);
+    let res = await fetch(url);
     if (!res.ok) {
       // Retry without 0xfe0f variation selector if needed
       const simplified = [...emoji]
@@ -47,20 +50,16 @@ async function getEmojiBase64(emoji: string): Promise<string | null> {
         .filter((c) => c !== 'fe0f')
         .join('-');
       if (simplified !== codePoints) {
-        const res2 = await fetch(`https://cdn.jsdelivr.net/gh/jdecked/twemoji@main/assets/72x72/${simplified}.png`);
-        if (res2.ok) {
-          const ab = await res2.arrayBuffer();
-          const b64 = `data:image/png;base64,${Buffer.from(ab).toString('base64')}`;
-          emojiBase64Cache.set(codePoints, b64);
-          return b64;
-        }
+        res = await fetch(`https://cdn.jsdelivr.net/gh/jdecked/twemoji@main/assets/72x72/${simplified}.png`);
       }
-      return null;
     }
-    const arrayBuffer = await res.arrayBuffer();
-    const b64 = `data:image/png;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
-    emojiBase64Cache.set(codePoints, b64);
-    return b64;
+    if (res && res.ok) {
+      const arrayBuffer = await res.arrayBuffer();
+      const b64 = `data:image/png;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
+      emojiBase64Cache.set(codePoints, b64);
+      return b64;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -74,64 +73,75 @@ function escapeXml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function measureCharWidth(char: string, fontSize: number): number {
-  if (isEmojiChar(char)) return fontSize * 1.05;
-  if (/\s/.test(char)) return fontSize * 0.28;
-  if (/^[iljIt!.,:;'|`1]$/.test(char)) return fontSize * 0.28;
-  if (/^[WM]$/.test(char)) return fontSize * 0.85;
-  if (/^[wm]$/.test(char)) return fontSize * 0.72;
-  if (/^[A-Z]$/.test(char)) return fontSize * 0.58;
-  if (/^[—–@%#&+=]$/.test(char)) return fontSize * 0.7;
-  return fontSize * 0.46;
+async function measureText(text: string, fontSize: number): Promise<number> {
+  if (!text) return 0;
+  const key = `${fontSize}:${text}`;
+  if (textMeasureCache.has(key)) return textMeasureCache.get(key)!;
+
+  const svg = `<svg width="2000" height="400" xmlns="http://www.w3.org/2000/svg"><text x="0" y="${fontSize}" font-family="${FONT_FAMILY}" font-size="${fontSize}" font-weight="500">${escapeXml(text)}</text></svg>`;
+  try {
+    const res = await sharp(Buffer.from(svg)).trim().toBuffer({ resolveWithObject: true });
+    const w = (res.info.width || 0) + (res.info.trimOffsetLeft ? Math.abs(res.info.trimOffsetLeft) : 0);
+    textMeasureCache.set(key, w);
+    return w;
+  } catch {
+    const fallback = text.length * fontSize * 0.55;
+    textMeasureCache.set(key, fallback);
+    return fallback;
+  }
 }
 
-function tokenize(text: string): Token[] {
-  const graphemes = [...segmenter.segment(text)].map((s) => s.segment);
+function tokenizeLine(lineStr: string): Token[] {
+  const graphemes = [...segmenter.segment(lineStr)].map((s) => s.segment);
   const tokens: Token[] = [];
-  let currentWord = '';
+  let currentText = '';
 
   for (const g of graphemes) {
     if (isEmojiChar(g)) {
-      if (currentWord) {
-        tokens.push({ type: 'text', value: currentWord });
-        currentWord = '';
+      if (currentText) {
+        tokens.push({ type: 'text', value: currentText });
+        currentText = '';
       }
       tokens.push({ type: 'emoji', value: g });
     } else if (/\s/.test(g)) {
-      if (currentWord) {
-        tokens.push({ type: 'text', value: currentWord });
-        currentWord = '';
+      if (currentText) {
+        tokens.push({ type: 'text', value: currentText });
+        currentText = '';
       }
       tokens.push({ type: 'space', value: ' ' });
     } else {
-      currentWord += g;
+      currentText += g;
     }
   }
 
-  if (currentWord) {
-    tokens.push({ type: 'text', value: currentWord });
+  if (currentText) {
+    tokens.push({ type: 'text', value: currentText });
   }
 
   return tokens;
 }
 
-function tokenWidth(token: Token, fontSize: number): number {
-  if (token.type === 'emoji') return fontSize * 1.05;
-  if (token.type === 'space') return fontSize * 0.28;
-  return [...segmenter.segment(token.value)].reduce((acc, s) => acc + measureCharWidth(s.segment, fontSize), 0);
+async function getTokenWidth(token: Token, fontSize: number): Promise<number> {
+  if (token.type === 'emoji') {
+    return fontSize * 1.1;
+  }
+  if (token.type === 'space') {
+    return fontSize * 0.28;
+  }
+  return await measureText(token.value, fontSize);
 }
 
-function wrapTokens(tokens: Token[], fontSize: number): Token[][] {
+async function wrapLineTokens(tokens: Token[], fontSize: number): Promise<Token[][]> {
   const lines: Token[][] = [];
   let currentLine: Token[] = [];
   let currentWidth = 0;
 
   for (const token of tokens) {
-    const w = tokenWidth(token, fontSize);
+    const w = await getTokenWidth(token, fontSize);
     if (token.type === 'space' && currentLine.length === 0) continue;
 
     if (currentWidth + w <= MAX_CONTENT_WIDTH || currentLine.length === 0) {
-      currentLine.push(token);
+      currentLine.push({ ...token, width: w });
       currentWidth += w;
     } else {
       while (currentLine.length && currentLine[currentLine.length - 1].type === 'space') {
@@ -142,7 +152,7 @@ function wrapTokens(tokens: Token[], fontSize: number): Token[][] {
         currentLine = [];
         currentWidth = 0;
       } else {
-        currentLine = [token];
+        currentLine = [{ ...token, width: w }];
         currentWidth = w;
       }
     }
@@ -156,53 +166,90 @@ function wrapTokens(tokens: Token[], fontSize: number): Token[][] {
   return lines;
 }
 
-async function createTextSvg(text: string, themeName: BratTheme): Promise<{ svg: Buffer; blur: number }> {
-  const theme = THEMES[themeName] || THEMES.green;
-  const rawText = text.trim();
-  const tokens = tokenize(rawText);
+async function calculateLayout(rawText: string): Promise<{ optimalSize: number; lines: Token[][] }> {
+  const paragraphs = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const paragraphTokens = paragraphs.map(tokenizeLine);
 
   // Pre-fetch all emojis concurrently
-  await Promise.all(
-    tokens.filter((t): t is { type: 'emoji'; value: string } => t.type === 'emoji').map((t) => getEmojiBase64(t.value))
-  );
+  const allEmojis: string[] = [];
+  for (const p of paragraphTokens) {
+    for (const t of p) {
+      if (t.type === 'emoji') allEmojis.push(t.value);
+    }
+  }
+  await Promise.all(allEmojis.map(getEmojiBase64));
 
   let low = 16;
   let high = 140;
   let optimalSize = 16;
-  let optimalLines: Token[][] = [tokens];
+  let optimalLines: Token[][] = [];
 
   while (low <= high) {
     const testSize = Math.floor((low + high) / 2);
-    const lines = wrapTokens(tokens, testSize);
-    const lineHeight = testSize * 1.08;
-    const totalHeight = lines.length * lineHeight;
+    const allLinesForTest: Token[][] = [];
+
+    for (const tokens of paragraphTokens) {
+      const wrapped = await wrapLineTokens(tokens, testSize);
+      allLinesForTest.push(...wrapped);
+    }
+
+    const lineHeight = testSize * 1.15;
+    const totalHeight = allLinesForTest.length * lineHeight;
     const maxLineWidth = Math.max(
-      ...lines.map((line) => line.reduce((acc, tok) => acc + tokenWidth(tok, testSize), 0)),
+      ...allLinesForTest.map((line) => line.reduce((acc, tok) => acc + (tok.width || 0), 0)),
       0
     );
 
-    if (totalHeight <= MAX_CONTENT_HEIGHT && maxLineWidth <= MAX_CONTENT_WIDTH && lines.length <= 8) {
+    if (totalHeight <= MAX_CONTENT_HEIGHT && maxLineWidth <= MAX_CONTENT_WIDTH && allLinesForTest.length <= 10) {
       optimalSize = testSize;
-      optimalLines = lines;
+      optimalLines = allLinesForTest;
       low = testSize + 1;
     } else {
       high = testSize - 1;
     }
   }
 
-  const lineHeight = optimalSize * 1.08;
-  const totalTextHeight = optimalLines.length * lineHeight;
+  if (optimalLines.length === 0) {
+    for (const tokens of paragraphTokens) {
+      const wrapped = await wrapLineTokens(tokens, optimalSize);
+      optimalLines.push(...wrapped);
+    }
+  }
+
+  return { optimalSize, lines: optimalLines };
+}
+
+async function createTextSvg(text: string, themeName: BratTheme): Promise<{ svg: Buffer; blur: number }> {
+  const theme = THEMES[themeName] || THEMES.green;
+  const { optimalSize, lines } = await calculateLayout(text.trim());
+
+  const lineHeight = optimalSize * 1.15;
+  const totalTextHeight = lines.length * lineHeight;
   const startY = (CANVAS_SIZE - totalTextHeight) / 2;
 
   const svgElements: string[] = [];
 
-  optimalLines.forEach((line, lineIdx) => {
-    const lineWidth = line.reduce((acc, tok) => acc + tokenWidth(tok, optimalSize), 0);
+  lines.forEach((line, lineIdx) => {
+    // Add extra spacing between adjacent text and emoji if no space token exists
+    const adjustedTokens: Token[] = [];
+    for (let i = 0; i < line.length; i++) {
+      const tok = line[i];
+      adjustedTokens.push(tok);
+      const nextTok = line[i + 1];
+      if (
+        (tok.type === 'text' && nextTok && nextTok.type === 'emoji') ||
+        (tok.type === 'emoji' && nextTok && nextTok.type === 'text')
+      ) {
+        adjustedTokens.push({ type: 'space', value: ' ', width: optimalSize * 0.15 });
+      }
+    }
+
+    const lineWidth = adjustedTokens.reduce((acc, tok) => acc + (tok.width || 0), 0);
     let currentX = (CANVAS_SIZE - lineWidth) / 2;
     const lineY = startY + lineIdx * lineHeight;
 
-    for (const token of line) {
-      const w = tokenWidth(token, optimalSize);
+    for (const token of adjustedTokens) {
+      const tokenW = token.width || 0;
       if (token.type === 'emoji') {
         const b64 = emojiBase64Cache.get(emojiToCodePoints(token.value));
         const emojiSize = optimalSize * 0.95;
@@ -213,16 +260,16 @@ async function createTextSvg(text: string, themeName: BratTheme): Promise<{ svg:
           );
         } else {
           svgElements.push(
-            `<text x="${(currentX + w / 2).toFixed(1)}" y="${(lineY + lineHeight * 0.8).toFixed(1)}" text-anchor="middle" font-family="'Segoe UI Emoji', 'Noto Color Emoji', sans-serif" font-size="${optimalSize}" fill="${theme.text}">${escapeXml(token.value)}</text>`
+            `<text x="${(currentX + tokenW / 2).toFixed(1)}" y="${(lineY + lineHeight * 0.8).toFixed(1)}" text-anchor="middle" font-family="'Segoe UI Emoji', 'Noto Color Emoji', sans-serif" font-size="${optimalSize}" fill="${theme.text}">${escapeXml(token.value)}</text>`
           );
         }
       } else if (token.type === 'text') {
         const textY = lineY + lineHeight * 0.8;
         svgElements.push(
-          `<text x="${currentX.toFixed(1)}" y="${textY.toFixed(1)}" text-anchor="start" font-family="'Arial Narrow', Arial, 'Helvetica Neue', Helvetica, sans-serif" font-size="${optimalSize}" font-weight="500" fill="${theme.text}" letter-spacing="-0.02em">${escapeXml(token.value)}</text>`
+          `<text x="${currentX.toFixed(1)}" y="${textY.toFixed(1)}" text-anchor="start" font-family="${FONT_FAMILY}" font-size="${optimalSize}" font-weight="500" fill="${theme.text}">${escapeXml(token.value)}</text>`
         );
       }
-      currentX += w;
+      currentX += tokenW;
     }
   });
 

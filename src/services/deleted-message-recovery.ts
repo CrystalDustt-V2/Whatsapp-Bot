@@ -567,16 +567,23 @@ export type DeletedChatSummary = {
   lastSenderName: string;
 };
 
-export function listAllDeletedMessages(limit = 25): DeletedMessageRecord[] {
+export function getAllDeletedMessages(): DeletedMessageRecord[] {
   if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
 
   return loadState()
     .deleted
-    .slice(-boundedNumber(limit, 25, 1, 100))
+    .slice()
     .reverse();
 }
 
-export function listDeletedMessages(chatJid?: string, limit = 10): DeletedMessageRecord[] {
+export function listAllDeletedMessages(limit?: number): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+
+  const all = getAllDeletedMessages();
+  return typeof limit === 'number' && limit > 0 ? all.slice(0, limit) : all;
+}
+
+export function listDeletedMessages(chatJid?: string, limit = 30): DeletedMessageRecord[] {
   if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
   if (!chatJid || chatJid === 'all' || chatJid === 'global') {
     return listAllDeletedMessages(limit);
@@ -585,7 +592,7 @@ export function listDeletedMessages(chatJid?: string, limit = 10): DeletedMessag
   return loadState()
     .deleted
     .filter((item) => item.chatJid === chatJid)
-    .slice(-boundedNumber(limit, 10, 1, 50))
+    .slice(-boundedNumber(limit, 30, 1, 500))
     .reverse();
 }
 
