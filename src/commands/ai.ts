@@ -50,11 +50,12 @@ const IS_EMBEDDING_GEMINI = AI_EMBEDDING_API_BASE_URL.includes('generativelangua
 const AI_EMBEDDING_API_KEY = config.AI_EMBEDDING_API_KEY || (IS_EMBEDDING_GEMINI ? config.AI_API_KEY : AI_API_KEY);
 const AI_EMBEDDING_MODEL = config.AI_EMBEDDING_MODEL;
 const AI_EMBEDDING_ENDPOINT = config.AI_EMBEDDING_ENDPOINT || '/embeddings';
-const MAX_MEMORY_MESSAGES = 12;
-const MAX_CHAT_MEMORY_CHARS = 2000;
-const MAX_PROMPT_MEMORY_CHARS = 3000;
-const MAX_PROMPT_COMMANDS = 24;
+const MAX_MEMORY_MESSAGES = config.AI_MAX_MEMORY_MESSAGES || 100;
+const MAX_CHAT_MEMORY_CHARS = config.AI_MAX_CHAT_MEMORY_CHARS || 50000;
+const MAX_PROMPT_MEMORY_CHARS = config.AI_MAX_PROMPT_MEMORY_CHARS || 30000;
+const MAX_PROMPT_COMMANDS = 30;
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
+const AI_MAX_TOKENS = config.AI_MAX_TOKENS || 4096;
 const chatMemory = new Map<string, ChatMessage[]>();
 const puterAI = createPuterAIService({
   authToken: config.PUTER_AUTH_TOKEN,
@@ -238,7 +239,7 @@ async function geminiChat(messages: ChatMessage[]) {
     .filter((content) => content.parts[0].text);
   const body: Record<string, unknown> = {
     contents,
-    generationConfig: { maxOutputTokens: 800 },
+    generationConfig: { maxOutputTokens: AI_MAX_TOKENS },
   };
 
   if (systemText) {
@@ -364,7 +365,7 @@ async function chat(messages: ChatMessage[], withTools = true) {
   if (IS_PUTER) {
     const result = await puterAI.chat(messages, {
       model: AI_MODEL,
-      maxTokens: 800,
+      maxTokens: AI_MAX_TOKENS,
       tools: withTools && config.AI_ENABLE_TOOLS ? botToolDefinitions() : undefined,
       onProgress: (progress) => aiDebug(progress, 'puter progress'),
     });
@@ -386,7 +387,7 @@ async function chat(messages: ChatMessage[], withTools = true) {
   const body: Record<string, unknown> = {
     model: AI_MODEL,
     messages,
-    max_tokens: 800,
+    max_tokens: AI_MAX_TOKENS,
   };
 
   if (withTools && config.AI_ENABLE_TOOLS) {
@@ -437,7 +438,7 @@ async function replyText(ctx: BotContext, text: string): Promise<void> {
 }
 
 function promptSnippet(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max)}\n...[truncated]` : value;
+  return value.length > max ? value.slice(0, max) : value;
 }
 
 function commandWords(value: string): string[] {
@@ -473,10 +474,6 @@ function commandList(input: string): string {
     .join('\n');
 
   return scored;
-}
-
-function shouldIncludeSavedMemory(input: string): boolean {
-  return /\b(remember|earlier|previous|before|history|chat|messages?|context|mentioned|said|told|profile|number|who (?:is|was|are)|what did)\b/i.test(input);
 }
 
 function compactMemoryMessage(message: ChatMessage): ChatMessage {
@@ -1086,22 +1083,43 @@ export const AiCommand: Command = {
         return;
       }
 
-      const savedMemory = shouldIncludeSavedMemory(input)
-        ? readAiMemoryContext(ctx.message.key.remoteJid || '', MAX_PROMPT_MEMORY_CHARS)
-        : '';
+      const savedMemory = readAiMemoryContext(ctx.message.key.remoteJid || '', MAX_PROMPT_MEMORY_CHARS);
       const relevantCommands = commandList(input);
-      const systemPrompt = `You are CrystalDust V0, a helpful WhatsApp assistant made by CrystalDust. Default to concise text replies.
-Do not generate images, stickers, audio, voice, embeddings, or run bot commands unless the user explicitly asks for that exact kind of output. Simple questions, greetings, explanations, opinions, jokes, recommendations, and normal chat must be answered as plain text only.
-Use generate_image only for explicit image, drawing, picture, sticker, logo, illustration, or visual creation requests; set as_sticker=true when the user asks for a sticker. Use generate_audio only for explicit audio, speech, voice, TTS, or sound requests. Use embed_text only for explicit embedding, vector, or semantic similarity requests. Use run_bot_command only when an existing bot command clearly matches the user's requested bot action. Use fetch_url when the user asks you to inspect or send a public URL. If unsure, ask a short text clarification. Never run ai.
-Do not select image or audio output just because the selected model supports it; modality must come from the user's explicit request.
-When Puter.js is enabled, you can transcribe public audio URLs and analyze public image URLs only when the user explicitly asks for it.
-If the user asks who you are, says hello, asks an opinion, or asks a normal question, reply in text only.
-If your model cannot call tools, reply exactly as RUN_COMMAND {"command":"name","args":["arg1"]} only when a bot command should be used.
-${IS_GEMINI ? 'Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}
-Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.
-Use saved chat memory only as background context, and do not claim certainty when the memory is incomplete.
-${savedMemory ? `\nSaved chat memory:\n${savedMemory}\n` : ''}
-${relevantCommands ? `\nRelevant bot commands:\n${relevantCommands}` : '\nFor command discovery, use run_bot_command with menu, search, or help only when the user explicitly asks.'}`;
+
+      const defaultSystemPrompt = `You are CrystalDust V0, a powerful, helpful AI assistant and pair programmer created by CrystalDust for WhatsApp.
+You have large context awareness across conversation turns, previous chat history, and bot capabilities.
+
+Guidelines:
+1. Answer questions thoroughly, accurately, and naturally in clean WhatsApp markdown formatting.
+2. For coding, technical tasks, or code generation: provide complete, working code blocks with syntax highlighting without unnecessary omissions or truncation.
+3. For general chat, analysis, math, questions, explanations, or discussions: reply directly in text.
+4. Tool & Output Modality Rules:
+   - Use generate_image only when the user explicitly asks for an image, drawing, picture, photo, logo, illustration, visual, or sticker (set as_sticker=true if a sticker is requested).
+   - Use generate_audio only when the user explicitly asks for voice, speech, audio, sound, or TTS.
+   - Use embed_text only when the user explicitly requests text embeddings or vectors.
+   - Use run_bot_command when the user asks to run an existing WhatsApp bot command.
+   - Use fetch_url when the user asks you to inspect or summarize a public URL.
+5. If the AI model does not support native function calling, emit bot command requests in plain text as: RUN_COMMAND {"command":"name","args":["arg1"]}
+${IS_GEMINI ? '6. Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}`;
+
+      const baseSystemPrompt = (config.AI_SYSTEM_PROMPT || '').trim() || defaultSystemPrompt;
+
+      const systemPromptParts = [
+        baseSystemPrompt,
+        `Current requester: ${ctx.sender.displayName}${ctx.sender.phoneNumber ? ` (${ctx.sender.phoneNumber})` : ''}.`,
+      ];
+
+      if (savedMemory) {
+        systemPromptParts.push(`Saved chat background context:\n${savedMemory}`);
+      }
+
+      if (relevantCommands) {
+        systemPromptParts.push(`Relevant bot commands:\n${relevantCommands}`);
+      } else {
+        systemPromptParts.push('For command discovery, use run_bot_command with menu, search, or help only when the user explicitly asks.');
+      }
+
+      const systemPrompt = systemPromptParts.join('\n\n');
 
       aiDebug(
         {

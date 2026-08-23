@@ -127,7 +127,7 @@ type PuterServiceOptions = {
 const nodeRequire = createRequire(__filename);
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_RETRIES = 1;
-const MAX_HISTORY_MESSAGES = 24;
+const MAX_HISTORY_MESSAGES = config.AI_MAX_MEMORY_MESSAGES || 100;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

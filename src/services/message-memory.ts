@@ -208,12 +208,12 @@ export function recordAiMemoryMessage(
   }
 }
 
-export function readAiMemoryContext(chatJid: string, maxChars = 3000): string {
+export function readAiMemoryContext(chatJid: string, maxChars = 30000): string {
   if (!config.AI_MEMORY_ENABLED || !chatJid) return '';
 
   const entries = readMemoryEntries().filter((entry) => entry.chatJid === chatJid).slice(-memoryLimit());
   if (!entries.length) return '';
-  const limit = boundedNumber(maxChars, 3000, 500, 20000);
+  const limit = boundedNumber(maxChars, 30000, 500, 100000);
 
   const people = new Map<string, AiMemoryEntry>();
   for (const entry of entries) {
