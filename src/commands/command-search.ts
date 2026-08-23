@@ -2,10 +2,39 @@ import config from '../config';
 import { commandRegistry } from '../core/command-registry';
 import type { Command } from '../types';
 import { CommandCategory } from '../types';
+import { formatUsageError } from '../core/response-formatter';
 
 type SearchResult = {
   command: Command;
   score: number;
+};
+
+const SYNONYMS: Record<string, string[]> = {
+  music: ['play', 'song', 'spotify', 'soundcloud', 'youtube-music', 'newgrounds', 'audio', 'stream'],
+  song: ['play', 'music', 'spotify', 'soundcloud', 'youtube-music'],
+  audio: ['toaudio', 'tomp3', 'nightcore', 'bassboost', 'reverb', 'echo', 'play', 'spotify', 'music'],
+  video: ['ytvideo', 'tiktok', 'instagram', 'facebook', 'twitter', 'vimeo', 'snackvideo', 'pinvideo'],
+  download: ['ytvideo', 'tiktok', 'instagram', 'facebook', 'twitter', 'play', 'spotify', 'download'],
+  downloader: ['ytvideo', 'tiktok', 'instagram', 'facebook', 'twitter', 'play', 'spotify'],
+  stalk: ['profile', 'igprofile', 'tiktokprofile', 'xprofile', 'ghprofile', 'redditprofile', 'ytprofile'],
+  profile: ['profile', 'igprofile', 'tiktokprofile', 'xprofile', 'ghprofile', 'redditprofile', 'ytprofile'],
+  user: ['profile', 'igprofile', 'tiktokprofile', 'xprofile', 'ghprofile'],
+  recover: ['deleted'],
+  delete: ['deleted'],
+  deleted: ['deleted'],
+  undelete: ['deleted'],
+  sticker: ['sticker', 'sbrat', 'memesticker', 'quotesticker', 'circlesticker', 'roundedsticker', 'bwsticker'],
+  brat: ['sbrat'],
+  photo: ['sticker', 'wallpaper', 'pinterest', 'enhance', 'blur', 'sharpen', 'grayscale'],
+  image: ['sticker', 'wallpaper', 'pinterest', 'enhance', 'blur', 'sharpen', 'grayscale', 'toimage'],
+  wallpaper: ['wallpaper', 'pinterest'],
+  rpg: ['economy', 'balance', 'hunt', 'fish', 'mine', 'farm', 'upgrade', 'quests', 'stats', 'inventory', 'shop', 'boss', 'pet', 'clan'],
+  game: ['economy', 'balance', 'hunt', 'fish', 'mine', 'farm', 'upgrade', 'quests', 'stats', 'inventory', 'gamble', 'rob', 'boss'],
+  money: ['balance', 'wallet', 'bank', 'daily', 'transfer', 'shop', 'sell', 'economy'],
+  coins: ['balance', 'wallet', 'bank', 'daily', 'transfer', 'shop', 'sell', 'economy'],
+  quest: ['quests', 'tasks', 'dailyquests'],
+  cooldown: ['cooldowns', 'cd', 'timers'],
+  ai: ['ai', 'ask', 'gpt', 'gemini', 'chat'],
 };
 
 function tokens(value: string): string[] {
@@ -43,6 +72,14 @@ function commandScore(command: Command, query: string): number {
   const normalizedDescription = descriptionTokens.join(' ');
   const normalizedQuery = queryTokens.join(' ');
 
+  let synonymBonus = 0;
+  for (const token of queryTokens) {
+    const list = SYNONYMS[token];
+    if (list && (list.includes(command.name) || command.aliases?.some((a) => list.includes(a)))) {
+      synonymBonus += 85;
+    }
+  }
+
   const scores: number[] = queryTokens.map((token) => {
     if (tokenMatches(titleTokens, token)) return 100;
     if (tokenMatches(descriptionTokens, token)) return 85;
@@ -58,7 +95,7 @@ function commandScore(command: Command, query: string): number {
       ? 6
       : 0;
 
-  return Math.min(100, Math.round(average + phraseBonus));
+  return Math.min(100, Math.round(average + phraseBonus + synonymBonus));
 }
 
 function searchCommands(query: string): SearchResult[] {
@@ -71,30 +108,49 @@ function searchCommands(query: string): SearchResult[] {
 
 export const CommandSearchCommand: Command = {
   name: 'search',
-  aliases: ['findcmd', 'cmdsearch'],
+  aliases: ['findcmd', 'cmdsearch', 'searchcmd'],
   category: CommandCategory.CORE,
-  description: 'Search bot commands by name and description',
+  description: 'Search bot commands by keyword, topic, aliases, and description',
   usage: 'search <query>',
+  examples: ['search music', 'search sticker', 'search deleted', 'search rpg', 'search video'],
+  inputs: 'Keyword, topic, or command feature',
   async execute(ctx) {
     const query = (ctx.rawArgs || ctx.args.join(' ')).trim();
     if (!query) {
-      await ctx.reply('Usage: .search <query>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'search',
+          reason: 'Search keyword or query is required.',
+          examples: ['search music', 'search download', 'search economy', 'search sticker'],
+          hint: 'Searches across command names, aliases, and functionality descriptions.',
+        })
+      );
       return;
     }
 
     const results = searchCommands(query);
     if (!results.length) {
-      await ctx.reply(`No commands found for "${query}".`);
+      await ctx.reply(
+        `🔍 *No matching commands found for "${query}"*\n\n💡 Try broader keywords (e.g. \`music\`, \`video\`, \`sticker\`, \`game\`) or browse the full menu with \`${config.BOT_PREFIX}menu\`.`
+      );
       return;
     }
 
-    const lines = results.map(({ command, score }, index) => {
-      const aliases = command.aliases?.length ? ` (${command.aliases.join(', ')})` : '';
-      const description = command.description ? ` - ${command.description}` : '';
-      return `${index + 1}. ${score}% ${config.BOT_PREFIX}${command.name}${aliases}${description}`;
+    const topResults = results.slice(0, 10);
+    const lines = topResults.map(({ command, score }, index) => {
+      const aliases = command.aliases?.length ? ` (${command.aliases.slice(0, 3).map((a) => `.${a}`).join(', ')})` : '';
+      const description = command.description ? `\n   _${command.description}_` : '';
+      return `${index + 1}. \`${config.BOT_PREFIX}${command.name}\`${aliases}${description}`;
     });
 
-    await ctx.reply(`*Command search: ${query}*\nBest matches: ${results.length}\n\n${lines.join('\n')}`);
+    const moreHint = results.length > 10 ? `\n\n_...and ${results.length - 10} more matches. View categories with ${config.BOT_PREFIX}menu._` : '';
+
+    await ctx.reply(
+      `🔍 *Command Search Results for "${query}"*\n` +
+      `Found ${results.length} matching commands:\n\n` +
+      `${lines.join('\n\n')}${moreHint}\n\n` +
+      `👉 Type \`${config.BOT_PREFIX}help <command>\` for full documentation.`
+    );
   },
 };
 

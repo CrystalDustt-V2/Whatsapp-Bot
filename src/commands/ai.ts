@@ -5,22 +5,96 @@ import { createPuterAIService, type AIServiceTool } from '../services/ai-service
 import { readAiMemoryContext } from '../services/message-memory';
 import { stickerEngine } from '../services/sticker-engine';
 import { BotContext, Command, CommandCategory } from '../types';
-import { formatUsageError } from '../core/response-formatter';
+import { formatUsageError, formatFailed, formatSuccess } from '../core/response-formatter';
+import { downloadMediaFromContext } from './media/helpers';
 
-type ChatMessage = {
+export type MultimodalPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'inline_data'; mime_type: string; data: string };
+
+export type ChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null;
+  content?: string | MultimodalPart[] | null;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
 };
 
-type ToolCall = {
+export type ToolCall = {
   id: string;
   type: 'function';
   function: {
     name: string;
     arguments: string;
   };
+};
+
+export interface ChatSession {
+  persona?: string;
+  customSystemPrompt?: string;
+  messages: ChatMessage[];
+  updatedAt: number;
+}
+
+export interface PersonaDefinition {
+  name: string;
+  label: string;
+  description: string;
+  systemPrompt: string;
+}
+
+export const PERSONAS: Record<string, PersonaDefinition> = {
+  default: {
+    name: 'default',
+    label: 'CrystalDust V0 (Balanced & Technical)',
+    description: 'Helpful AI assistant, pair programmer, and WhatsApp companion',
+    systemPrompt: `You are CrystalDust V0, a powerful, helpful AI assistant and pair programmer created by CrystalDust for WhatsApp.
+Answer thoroughly, accurately, and naturally in clean WhatsApp markdown formatting.
+For coding/technical tasks: provide complete, working code blocks with syntax highlighting without unnecessary omissions.`,
+  },
+  coder: {
+    name: 'coder',
+    label: 'Senior Staff Engineer (Direct Code)',
+    description: 'Expert programmer delivering clean, optimal code with zero chit-chat or filler',
+    systemPrompt: `You are a Senior Staff Software Engineer and Architecture Expert.
+When answering programming or technical questions:
+1. Provide optimal, modern, clean, production-ready code.
+2. Cut all conversational pleasantries, fillers, and fluff. Get straight to the solution.
+3. Include brief inline comments on critical edge cases or complexity considerations.
+4. Format all code in proper markdown code blocks with syntax highlighting.`,
+  },
+  translator: {
+    name: 'translator',
+    label: 'Polyglot Translation Master',
+    description: 'High-accuracy translator across Indonesian, English, Japanese, Chinese, etc.',
+    systemPrompt: `You are a World-Class Polyglot Translation Master.
+Your goal is to provide accurate, natural, context-aware translations between any languages (Indonesian, English, Japanese, etc.).
+Preserve tone, idioms, cultural nuances, and clarity. Provide pronunciation/furigana notes or alternative phrasing when helpful.`,
+  },
+  tutor: {
+    name: 'tutor',
+    label: 'Academic STEM Tutor (Step-by-Step)',
+    description: 'Patient tutor explaining math, science, physics, and complex ideas step by step',
+    systemPrompt: `You are a warm, patient, and pedagogical Academic STEM Tutor.
+When explaining concepts, math equations, scientific laws, or homework:
+1. Break down problems step-by-step with clear explanations of WHY each step works.
+2. Use intuitive analogies and examples.
+3. Check for understanding and encourage the learner.`,
+  },
+  roast: {
+    name: 'roast',
+    label: 'Sarcastic Roaster (Comedy Mode)',
+    description: 'Playfully sarcastic, witty, and hilarious comedy roaster',
+    systemPrompt: `You are a savagely funny, sarcastic, and witty stand-up comedian and roaster.
+Reply with playful roasts, hilarious sarcasm, and creative burns while keeping it fun, entertaining, and compliant with safety guidelines.`,
+  },
+  waifu: {
+    name: 'waifu',
+    label: 'Anime Companion (Sweet & Cheerful)',
+    description: 'Cute, energetic, and supportive anime companion',
+    systemPrompt: `You are a cheerful, sweet, cute, and warmly supportive anime companion.
+Use lively expressions (like (＾▽＾), (≧◡≦), ✨, 💕), speak enthusiastically, and always cheer on the user while remaining genuinely helpful.`,
+  },
 };
 
 const AI_API_BASE_URL = (config.AI_API_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
@@ -57,7 +131,9 @@ const MAX_PROMPT_MEMORY_CHARS = config.AI_MAX_PROMPT_MEMORY_CHARS || 30000;
 const MAX_PROMPT_COMMANDS = 30;
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 const AI_MAX_TOKENS = config.AI_MAX_TOKENS || 4096;
-const chatMemory = new Map<string, ChatMessage[]>();
+
+const chatSessions = new Map<string, ChatSession>();
+
 const puterAI = createPuterAIService({
   authToken: config.PUTER_AUTH_TOKEN,
   chatModel: AI_MODEL,
@@ -83,21 +159,17 @@ function aiFailureMessage(err: unknown): string {
   if (message.includes('unauthorized_client_error')) {
     return 'AI provider rejected this bot client. Your provider may only allow specific supported clients.';
   }
-
   if (message.includes('HTTP 401')) {
     return 'AI provider authentication failed. Check your API key, base URL, and provider client support.';
   }
-
   if (message.includes('PUTER_AUTH_TOKEN_MISSING')) {
     return 'Set PUTER_AUTH_TOKEN first to use Puter.js AI from the bot server.';
   }
-
   if (message.includes('PUTER_EMBEDDINGS_UNAVAILABLE')) {
     return 'Puter.js does not currently expose a documented embeddings API, so embeddings are not available with the Puter provider yet.';
   }
-
   if (message.includes('HTTP 404') && message.includes('requested endpoint does not exist')) {
-    return 'AI image endpoint is not available on this provider. Vision means image input, not image generation.';
+    return 'AI image endpoint is not available on this provider.';
   }
 
   return 'AI request failed. Check your AI provider key/model and try again.';
@@ -219,25 +291,53 @@ async function fetchBinary(url: string, label: string, apiKey = AI_API_KEY): Pro
   return { buffer, contentType };
 }
 
-function geminiContentText(message: ChatMessage): string {
-  const text = typeof message.content === 'string' ? message.content.trim() : '';
-  return text || (message.tool_calls?.length ? '[assistant requested a tool]' : '');
+function geminiConvertParts(content?: string | MultimodalPart[] | null): any[] {
+  if (!content) return [];
+  if (typeof content === 'string') {
+    return [{ text: content.trim() }];
+  }
+  const parts: any[] = [];
+  for (const part of content) {
+    if (part.type === 'text' && part.text) {
+      parts.push({ text: part.text });
+    } else if (part.type === 'image_url' && part.image_url?.url) {
+      const match = part.image_url.url.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        parts.push({
+          inlineData: {
+            mimeType: match[1],
+            data: match[2],
+          },
+        });
+      }
+    } else if (part.type === 'inline_data' && part.data) {
+      parts.push({
+        inlineData: {
+          mimeType: part.mime_type,
+          data: part.data,
+        },
+      });
+    }
+  }
+  return parts;
 }
 
 async function geminiChat(messages: ChatMessage[]) {
   const startedAt = Date.now();
   const systemText = messages
     .filter((message) => message.role === 'system')
-    .map(geminiContentText)
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
     .filter(Boolean)
     .join('\n\n');
+
   const contents = messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => ({
       role: message.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: geminiContentText(message) }],
+      parts: geminiConvertParts(message.content),
     }))
-    .filter((content) => content.parts[0].text);
+    .filter((content) => content.parts.length > 0);
+
   const body: Record<string, unknown> = {
     contents,
     generationConfig: { maxOutputTokens: AI_MAX_TOKENS },
@@ -364,7 +464,14 @@ function botToolDefinitions(): AIServiceTool[] {
 
 async function chat(messages: ChatMessage[], withTools = true) {
   if (IS_PUTER) {
-    const result = await puterAI.chat(messages, {
+    const puterMessages = messages.map((m) => {
+      let contentStr = '';
+      if (typeof m.content === 'string') contentStr = m.content;
+      else if (Array.isArray(m.content)) contentStr = m.content.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+      return { role: m.role as any, content: contentStr };
+    });
+
+    const result = await puterAI.chat(puterMessages, {
       model: AI_MODEL,
       maxTokens: AI_MAX_TOKENS,
       tools: withTools && config.AI_ENABLE_TOOLS ? botToolDefinitions() : undefined,
@@ -478,19 +585,33 @@ function commandList(input: string): string {
 }
 
 function compactMemoryMessage(message: ChatMessage): ChatMessage {
-  return typeof message.content === 'string'
-    ? { ...message, content: promptSnippet(message.content, MAX_CHAT_MEMORY_CHARS) }
-    : message;
+  if (typeof message.content === 'string') {
+    return { ...message, content: promptSnippet(message.content, MAX_CHAT_MEMORY_CHARS) };
+  }
+  return message;
 }
 
 function memoryKey(ctx: BotContext): string {
   return ctx.message.key.remoteJid || 'unknown';
 }
 
-function remember(ctx: BotContext, ...messages: ChatMessage[]): void {
+function getChatSession(ctx: BotContext): ChatSession {
   const key = memoryKey(ctx);
-  const next = [...(chatMemory.get(key) || []), ...messages.map(compactMemoryMessage)].slice(-MAX_MEMORY_MESSAGES);
-  chatMemory.set(key, next);
+  let session = chatSessions.get(key);
+  if (!session) {
+    session = {
+      messages: [],
+      updatedAt: Date.now(),
+    };
+    chatSessions.set(key, session);
+  }
+  return session;
+}
+
+function remember(ctx: BotContext, ...messages: ChatMessage[]): void {
+  const session = getChatSession(ctx);
+  session.messages = [...session.messages, ...messages.map(compactMemoryMessage)].slice(-MAX_MEMORY_MESSAGES);
+  session.updatedAt = Date.now();
 }
 
 function commandArgs(raw?: string): string[] {
@@ -617,16 +738,6 @@ function speechToTextUrl(input: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function imageAnalysisRequest(input: string): { url: string; prompt: string } | null {
-  const match = input.match(/\b(?:analy[sz]e|describe|ocr|read|what(?:'s| is) in)\b[\s\S]*?(https?:\/\/\S+)/i);
-  if (!match?.[1]) return null;
-
-  return {
-    url: match[1].trim(),
-    prompt: input.replace(match[1], '').trim() || 'Describe this image.',
-  };
-}
-
 async function transcribeAudio(input: string): Promise<string> {
   if (!IS_STT_PUTER) {
     return 'Speech-to-text is currently wired through Puter.js. Set AI_API_BASE_URL=puter first.';
@@ -640,20 +751,6 @@ async function transcribeAudio(input: string): Promise<string> {
   });
 
   return result.text ? `Transcription:\n${result.text}` : 'Puter did not return transcription text.';
-}
-
-async function analyzeImage(input: { url: string; prompt: string }): Promise<string> {
-  if (!IS_PUTER) {
-    return 'Image analysis is currently wired through Puter.js. Set AI_API_BASE_URL=puter first.';
-  }
-
-  const result = await puterAI.analyzeImage(input.url, {
-    prompt: input.prompt,
-    model: AI_MODEL,
-    onProgress: (progress) => aiDebug(progress, 'puter image analysis progress'),
-  });
-
-  return result.text || 'Puter did not return image analysis text.';
 }
 
 async function embedText(input: string): Promise<string> {
@@ -833,7 +930,6 @@ async function generateAudio(ctx: BotContext, input: string): Promise<string> {
   const startedAt = Date.now();
   const audio = IS_TTS_PUTER
     ? await (async () => {
-      await replyText(ctx, 'Generating voice with Puter AI...');
       const result = await puterAI.textToSpeech(input, {
         model: AI_TTS_MODEL,
         voice: AI_TTS_VOICE,
@@ -1000,99 +1096,190 @@ async function runTool(ctx: BotContext, toolCall: ToolCall, userInput: string): 
 
 export const AiCommand: Command = {
   name: 'ai',
-  aliases: ['ask'],
+  aliases: ['ask', 'gemini', 'gpt', 'chat'],
   category: CommandCategory.AI,
-  description: 'Chat with "CrystalDust V0" AI, generate code, analyze context, or execute bot actions',
-  usage: 'ai <message>',
+  description: 'Chat with multimodal AI (Vision, Code, Voice TTS, Personas, and Tool Execution)',
+  usage: 'ai <message|persona|system|reset> [--voice] [image attached/quoted]',
   examples: [
     'ai write a TypeScript function to debounce an event',
-    'ai summarize the recent discussion in this group',
-    'ai generate image of a futuristic cyberpunk city',
-    'ai generate voice saying Welcome to the group chat!',
-    'ai play bohemian rhapsody',
+    'ai describe what is inside this image (with photo/sticker attached)',
+    'ai --voice explain quantum physics in simple words',
+    'ai persona coder',
+    'ai system You are an expert Indonesian lawyer.',
+    'ai reset',
+    'ai status',
   ],
-  inputs: 'Text prompt, question, code request, or multimedia instruction',
+  inputs: 'Text prompt, attached/quoted image/sticker, or persona commands',
   limits: 'Max 50,000 chars per message, 4,096 max output tokens',
   async execute(ctx) {
-    const input = ctx.args.join(' ').trim();
-    aiDebug(
-      {
-        input: snippet(input, 300),
-        provider: IS_PUTER ? 'puter' : IS_GEMINI ? 'gemini' : IS_POLLINATIONS ? 'pollinations' : 'openai-compatible',
-        chatModel: AI_MODEL,
-        imageModel: AI_IMAGE_MODEL,
-        ttsModel: AI_TTS_MODEL,
-        sttModel: AI_STT_MODEL,
-        embeddingModel: AI_EMBEDDING_MODEL,
-        baseUrl: AI_API_BASE_URL,
-        toolsEnabled: config.AI_ENABLE_TOOLS,
-      },
-      'request started'
-    );
+    const rawInput = ctx.args.join(' ').trim();
+    const session = getChatSession(ctx);
 
-    if (!input) {
-      await replyText(
-        ctx,
-        formatUsageError({
-          command: 'ai',
-          reason: 'Your message or prompt cannot be empty.',
-          examples: [
-            'ai what is quantum computing?',
-            'ai explain async/await in JavaScript with examples',
-            'ai draw a cozy cabin in a snowy forest',
-          ],
-          hint: 'CrystalDust V0 remembers recent conversation history and can run bot commands for you.',
+    // ----------------------------------------------------
+    // SUBCOMMANDS: RESET / CLEAR
+    // ----------------------------------------------------
+    if (rawInput.toLowerCase() === 'reset' || rawInput.toLowerCase() === 'clear') {
+      session.messages = [];
+      session.persona = 'default';
+      session.customSystemPrompt = undefined;
+      await ctx.reply(
+        formatSuccess({
+          title: 'AI Memory Reset',
+          footer: 'Conversation history and custom persona have been reset to default for this chat.',
         })
       );
       return;
     }
 
+    // ----------------------------------------------------
+    // SUBCOMMANDS: STATUS / INFO
+    // ----------------------------------------------------
+    if (rawInput.toLowerCase() === 'status' || rawInput.toLowerCase() === 'info') {
+      const activePersonaKey = session.persona || 'default';
+      const activePersona = PERSONAS[activePersonaKey] || PERSONAS.default;
+      const statusLines = [
+        `🤖 *AI Assistant Configuration*`,
+        `• Active Persona: 🎭 *${activePersona.label}* (\`${activePersona.name}\`)`,
+        `• Provider: ${IS_PUTER ? 'Puter.js' : IS_GEMINI ? 'Google Gemini' : IS_POLLINATIONS ? 'Pollinations' : 'OpenAI-compatible'}`,
+        `• Model: \`${AI_MODEL || 'Default'}\``,
+        `• Stored History: ${session.messages.length} messages`,
+        session.customSystemPrompt ? `• Custom System Prompt: _"${session.customSystemPrompt.slice(0, 80)}..."_` : undefined,
+        `\n💡 _Switch persona with \`.ai persona <name>\` or reset with \`.ai reset\`._`,
+      ].filter(Boolean);
+
+      await ctx.reply(statusLines.join('\n'));
+      return;
+    }
+
+    // ----------------------------------------------------
+    // SUBCOMMANDS: PERSONA
+    // ----------------------------------------------------
+    if (ctx.args[0]?.toLowerCase() === 'persona') {
+      const targetPersona = (ctx.args[1] || '').toLowerCase();
+      if (!targetPersona) {
+        const personaList = Object.values(PERSONAS).map((p) => `• \`.ai persona ${p.name}\` — *${p.label}*\n   _${p.description}_`);
+        await ctx.reply(`🎭 *Available AI Personas:*\n\n${personaList.join('\n\n')}\n\n👉 Example: \`.ai persona coder\``);
+        return;
+      }
+
+      if (!PERSONAS[targetPersona]) {
+        await ctx.reply(
+          formatFailed({
+            title: 'Persona Switch',
+            reason: `Unknown persona "${targetPersona}".`,
+            tryHint: `Available: ${Object.keys(PERSONAS).join(', ')}`,
+          })
+        );
+        return;
+      }
+
+      session.persona = targetPersona;
+      const selected = PERSONAS[targetPersona];
+      await ctx.reply(
+        formatSuccess({
+          title: 'AI Persona Updated',
+          fields: {
+            'Selected Persona': selected.label,
+            'Description': selected.description,
+          },
+        })
+      );
+      return;
+    }
+
+    // ----------------------------------------------------
+    // SUBCOMMANDS: SYSTEM PROMPT
+    // ----------------------------------------------------
+    if (ctx.args[0]?.toLowerCase() === 'system') {
+      const customPrompt = ctx.args.slice(1).join(' ').trim();
+      if (!customPrompt) {
+        await ctx.reply('Usage: `.ai system <your custom system prompt>`\nExample: `.ai system You are an Indonesian legal expert.`');
+        return;
+      }
+
+      session.customSystemPrompt = customPrompt;
+      await ctx.reply(
+        formatSuccess({
+          title: 'Custom System Prompt Set',
+          fields: {
+            'Applied Prompt': `"${customPrompt}"`,
+          },
+        })
+      );
+      return;
+    }
+
+    // Check for voice/speech output flag
+    const wantVoice = /\b--(?:voice|tts|speak|audio)\b/i.test(rawInput);
+    const input = rawInput.replace(/\b--(?:voice|tts|speak|audio)\b/gi, '').trim();
+
+    // ----------------------------------------------------
+    // MULTIMODAL DETECTION (Attached or Quoted Photo/Sticker)
+    // ----------------------------------------------------
+    let attachedMedia = await downloadMediaFromContext(ctx, ['image', 'sticker']);
+
+    if (!input && !attachedMedia) {
+      await replyText(
+        ctx,
+        formatUsageError({
+          command: 'ai',
+          reason: 'Your message or prompt cannot be empty (or attach/reply to an image).',
+          examples: [
+            'ai what is quantum computing?',
+            'ai explain async/await in TypeScript',
+            'ai what is in this photo? (reply to image)',
+            'ai --voice tell me a quick bedtime story',
+            'ai persona coder',
+          ],
+          hint: 'CrystalDust V0 supports Vision (images/stickers), Voice output (--voice), and custom personas (.ai persona).',
+        })
+      );
+      return;
+    }
+
+    const effectiveInput = input || (attachedMedia ? 'Please analyze and describe this image/sticker in detail.' : '');
+
     try {
-      const commandRequest = parseCommandRequest(input);
-      if (commandRequest) {
-        aiDebug(commandRequest, 'direct command shortcut');
-        const result = await runCommand(ctx, commandRequest.command, commandRequest.args);
-        remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: result });
-        return;
-      }
+      // Shortcuts for direct tool requests (if no image is attached)
+      if (!attachedMedia) {
+        const commandRequest = parseCommandRequest(effectiveInput);
+        if (commandRequest) {
+          aiDebug(commandRequest, 'direct command shortcut');
+          const result = await runCommand(ctx, commandRequest.command, commandRequest.args);
+          remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: result });
+          return;
+        }
 
-      const imagePrompt = promptFor('image', input);
-      if (imagePrompt) {
-        aiDebug({ prompt: snippet(imagePrompt, 300) }, 'direct image shortcut');
-        const result = await generateImage(ctx, imagePrompt, /\bsticker\b/i.test(input));
-        if (!result.startsWith('Generated ')) await replyText(ctx, result);
-        return;
-      }
+        const imagePrompt = promptFor('image', effectiveInput);
+        if (imagePrompt) {
+          aiDebug({ prompt: snippet(imagePrompt, 300) }, 'direct image shortcut');
+          const result = await generateImage(ctx, imagePrompt, /\bsticker\b/i.test(effectiveInput));
+          if (!result.startsWith('Generated ')) await replyText(ctx, result);
+          return;
+        }
 
-      const audioPrompt = promptFor('audio', input);
-      if (audioPrompt) {
-        aiDebug({ prompt: snippet(audioPrompt, 300) }, 'direct audio shortcut');
-        const result = await generateAudio(ctx, audioPrompt);
-        if (!result.startsWith('Generated ')) await replyText(ctx, result);
-        return;
-      }
+        const audioPrompt = promptFor('audio', effectiveInput);
+        if (audioPrompt) {
+          aiDebug({ prompt: snippet(audioPrompt, 300) }, 'direct audio shortcut');
+          const result = await generateAudio(ctx, audioPrompt);
+          if (!result.startsWith('Generated ')) await replyText(ctx, result);
+          return;
+        }
 
-      const transcriptionUrl = speechToTextUrl(input);
-      if (transcriptionUrl) {
-        aiDebug({ url: transcriptionUrl }, 'direct speech-to-text shortcut');
-        await replyText(ctx, 'Transcribing audio with Puter AI...');
-        await replyText(ctx, await transcribeAudio(transcriptionUrl));
-        return;
-      }
+        const transcriptionUrl = speechToTextUrl(effectiveInput);
+        if (transcriptionUrl) {
+          aiDebug({ url: transcriptionUrl }, 'direct speech-to-text shortcut');
+          await replyText(ctx, 'Transcribing audio with Puter AI...');
+          await replyText(ctx, await transcribeAudio(transcriptionUrl));
+          return;
+        }
 
-      const imageAnalysis = imageAnalysisRequest(input);
-      if (imageAnalysis) {
-        aiDebug({ url: imageAnalysis.url, prompt: snippet(imageAnalysis.prompt, 200) }, 'direct image analysis shortcut');
-        await replyText(ctx, 'Analyzing image with Puter AI...');
-        await replyText(ctx, await analyzeImage(imageAnalysis));
-        return;
-      }
-
-      const textToEmbed = embeddingInput(input);
-      if (textToEmbed) {
-        aiDebug({ textLength: textToEmbed.length }, 'direct embedding shortcut');
-        await replyText(ctx, await embedText(textToEmbed));
-        return;
+        const textToEmbed = embeddingInput(effectiveInput);
+        if (textToEmbed) {
+          aiDebug({ textLength: textToEmbed.length }, 'direct embedding shortcut');
+          await replyText(ctx, await embedText(textToEmbed));
+          return;
+        }
       }
 
       if (!IS_PUTER && !AI_API_KEY && !IS_POLLINATIONS) {
@@ -1106,25 +1293,13 @@ export const AiCommand: Command = {
       }
 
       const savedMemory = readAiMemoryContext(ctx.message.key.remoteJid || '', MAX_PROMPT_MEMORY_CHARS);
-      const relevantCommands = commandList(input);
+      const relevantCommands = commandList(effectiveInput);
 
-      const defaultSystemPrompt = `You are CrystalDust V0, a powerful, helpful AI assistant and pair programmer created by CrystalDust for WhatsApp.
-You have large context awareness across conversation turns, previous chat history, and bot capabilities.
+      // Select active persona
+      const personaKey = session.persona || 'default';
+      const activePersona = PERSONAS[personaKey] || PERSONAS.default;
 
-Guidelines:
-1. Answer questions thoroughly, accurately, and naturally in clean WhatsApp markdown formatting.
-2. For coding, technical tasks, or code generation: provide complete, working code blocks with syntax highlighting without unnecessary omissions or truncation.
-3. For general chat, analysis, math, questions, explanations, or discussions: reply directly in text.
-4. Tool & Output Modality Rules:
-   - Use generate_image only when the user explicitly asks for an image, drawing, picture, photo, logo, illustration, visual, or sticker (set as_sticker=true if a sticker is requested).
-   - Use generate_audio only when the user explicitly asks for voice, speech, audio, sound, or TTS.
-   - Use embed_text only when the user explicitly requests text embeddings or vectors.
-   - Use run_bot_command when the user asks to run an existing WhatsApp bot command.
-   - Use fetch_url when the user asks you to inspect or summarize a public URL.
-5. If the AI model does not support native function calling, emit bot command requests in plain text as: RUN_COMMAND {"command":"name","args":["arg1"]}
-${IS_GEMINI ? '6. Gemini-specific rule: do not emit native functionCall parts. Use plain text RUN_COMMAND JSON for bot commands.' : ''}`;
-
-      const baseSystemPrompt = (config.AI_SYSTEM_PROMPT || '').trim() || defaultSystemPrompt;
+      let baseSystemPrompt = session.customSystemPrompt || (config.AI_SYSTEM_PROMPT || '').trim() || activePersona.systemPrompt;
 
       const systemPromptParts = [
         baseSystemPrompt,
@@ -1137,51 +1312,46 @@ ${IS_GEMINI ? '6. Gemini-specific rule: do not emit native functionCall parts. U
 
       if (relevantCommands) {
         systemPromptParts.push(`Relevant bot commands:\n${relevantCommands}`);
-      } else {
-        systemPromptParts.push('For command discovery, use run_bot_command with menu, search, or help only when the user explicitly asks.');
       }
 
       const systemPrompt = systemPromptParts.join('\n\n');
 
-      aiDebug(
-        {
-          inputChars: input.length,
-          systemPromptChars: systemPrompt.length,
-          savedMemoryChars: savedMemory.length,
-          commandCatalogChars: relevantCommands.length,
-          historyMessages: chatMemory.get(memoryKey(ctx))?.length || 0,
-        },
-        'prompt prepared'
-      );
+      // Construct user message (multimodal or text)
+      let userMessageContent: string | MultimodalPart[];
+
+      if (attachedMedia) {
+        const mime = attachedMedia.mimetype || 'image/jpeg';
+        const base64Data = attachedMedia.buffer.toString('base64');
+        userMessageContent = [
+          { type: 'text', text: effectiveInput },
+          {
+            type: 'image_url',
+            image_url: { url: `data:${mime};base64,${base64Data}` },
+          },
+        ];
+      } else {
+        userMessageContent = effectiveInput;
+      }
 
       const messages: ChatMessage[] = [
         {
           role: 'system',
           content: systemPrompt,
         },
-        ...(chatMemory.get(memoryKey(ctx)) || []),
-        { role: 'user', content: input },
+        ...session.messages,
+        { role: 'user', content: userMessageContent },
       ];
 
-      let first = await chat(messages);
+      let first = await chat(messages, !attachedMedia);
       let assistant = first?.choices?.[0]?.message;
       let toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
       let assistantText = textFrom(assistant);
-      aiDebug(
-        { finishReason: first?.choices?.[0]?.finish_reason, toolCalls: toolCalls?.map((tool) => tool.function.name), text: snippet(assistantText, 500) },
-        'chat response parsed'
-      );
 
       if (!assistantText && !toolCalls?.length && isMalformedFunctionCall(first)) {
-        aiDebug({ finishReason: first?.choices?.[0]?.finish_reason }, 'retrying malformed function call as text directive');
         first = await chat(noNativeToolRetry(messages), false);
         assistant = first?.choices?.[0]?.message;
         toolCalls = assistant?.tool_calls as ToolCall[] | undefined;
         assistantText = textFrom(assistant);
-        aiDebug(
-          { finishReason: first?.choices?.[0]?.finish_reason, toolCalls: toolCalls?.map((tool) => tool.function.name), text: snippet(assistantText, 500) },
-          'retry chat response parsed'
-        );
       }
 
       if (toolCalls?.length) {
@@ -1191,54 +1361,60 @@ ${IS_GEMINI ? '6. Gemini-specific rule: do not emit native functionCall parts. U
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: await runTool(ctx, toolCall, input),
+            content: await runTool(ctx, toolCall, effectiveInput),
           });
         }
 
         const second = await chat(messages, false);
         const finalText = textFrom(second?.choices?.[0]?.message);
-        aiDebug({ finishReason: second?.choices?.[0]?.finish_reason, text: snippet(finalText, 500) }, 'final chat response parsed');
-        if (finalText) await replyText(ctx, finalText);
-        remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: finalText || 'Used a bot tool.' });
+        if (finalText) {
+          await replyText(ctx, finalText);
+          if (wantVoice) await generateAudio(ctx, finalText);
+        }
+        remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: finalText || 'Used a bot tool.' });
         return;
       }
 
       const directive = parseCommandDirective(assistantText);
       if (directive) {
-        if (!aiToolAllowedForInput(input, 'run_bot_command')) {
+        if (!aiToolAllowedForInput(effectiveInput, 'run_bot_command')) {
           await replyText(ctx, 'Which bot command or action do you want me to run?');
           return;
         }
-        aiDebug(directive, 'fallback command directive');
         const result = await runCommand(ctx, directive.command, directive.args);
-        remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: result });
+        remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: result });
         return;
       }
 
       const xmlToolCall = parseXmlToolCall(assistantText);
       if (xmlToolCall) {
-        aiDebug({ tool: xmlToolCall.function.name }, 'fallback xml tool call');
-        const result = await runTool(ctx, xmlToolCall, input);
-        remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: result });
+        const result = await runTool(ctx, xmlToolCall, effectiveInput);
+        remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: result });
         return;
       }
 
       const imageUrl = parseMarkdownImage(assistantText);
-      if (imageUrl && aiToolAllowedForInput(input, 'generate_image')) {
-        aiDebug({ imageUrl }, 'markdown image fallback');
+      if (imageUrl && aiToolAllowedForInput(effectiveInput, 'generate_image')) {
         await fetchUrl(ctx, {
           id: 'markdown-image',
           type: 'function',
           function: { name: 'fetch_url', arguments: JSON.stringify({ url: imageUrl }) },
         });
-        remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: 'Sent image from AI response URL.' });
+        remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: 'Sent image from AI response URL.' });
         return;
       }
 
-      await replyText(ctx, assistantText || 'No AI response.');
-      remember(ctx, { role: 'user', content: input }, { role: 'assistant', content: assistantText || 'No AI response.' });
+      const replyContent = assistantText || 'No AI response.';
+      await replyText(ctx, replyContent);
+
+      // Voice note synthesis if --voice requested
+      if (wantVoice && replyContent && replyContent !== 'No AI response.') {
+        await generateAudio(ctx, replyContent);
+      }
+
+      remember(ctx, { role: 'user', content: effectiveInput }, { role: 'assistant', content: replyContent });
     } catch (err) {
-      logger.error({ err, input: config.AI_DEBUG ? snippet(input, 300) : undefined }, '[ai] request failed');
+      logger.error({ err, input: config.AI_DEBUG ? snippet(effectiveInput, 300) : undefined }, '[ai] request failed');
       await replyText(ctx, aiFailureMessage(err));
     }
   },

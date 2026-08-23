@@ -789,10 +789,10 @@ export const YouTubeProfileCommand: Command = {
 
 export const UniversalProfileCommand: Command = {
   name: 'profile',
-  aliases: ['stalk', 'fetchprofile', 'userprofile'],
+  aliases: ['socialprofile', 'userprofile', 'stalk', 'fetchprofile'],
   category: CommandCategory.SEARCH,
-  description: 'Universal stalker: fetch user profile across Instagram, TikTok, Twitter/X, GitHub, Reddit, and YouTube',
-  usage: 'profile <platform> <username> OR profile <profile-url>',
+  description: 'Public social media profile lookup across Instagram, TikTok, Twitter/X, GitHub, Reddit, and YouTube',
+  usage: 'profile <platform|url> [username]',
   examples: [
     'profile x elonmusk',
     'profile ig cristiano',
@@ -802,7 +802,7 @@ export const UniversalProfileCommand: Command = {
     'profile yt mkbhd',
     'profile https://instagram.com/leomessi',
   ],
-  inputs: 'Platform code + username, or full social media profile URL',
+  inputs: 'Platform identifier + username, or direct social media profile URL',
   async execute(ctx) {
     const raw = ctx.args.join(' ').trim();
     if (!raw) {

@@ -9,12 +9,15 @@ import { BorderStickerCommand } from './sticker/shape';
 import { SbratStickerCommand } from './sticker/sbrat';
 import { UrlStickerCommand } from './sticker/url';
 import { downloadMediaFromContext } from './media/helpers';
+import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 const STICKER_WATERMARK = 'Created with CrystalDust V0 Bot';
 const SHAPES = new Set(['circle', 'rounded']);
+
 const EFFECTS: Record<string, { label: string; run(buffer: Buffer): Promise<Buffer> }> = {
   bw: { label: 'black and white', run: (buffer) => stickerEngine.createBlackAndWhiteSticker(buffer) },
   blackwhite: { label: 'black and white', run: (buffer) => stickerEngine.createBlackAndWhiteSticker(buffer) },
+  grayscale: { label: 'black and white', run: (buffer) => stickerEngine.createBlackAndWhiteSticker(buffer) },
   sepia: { label: 'sepia', run: (buffer) => stickerEngine.createSepiaSticker(buffer) },
   vintage: { label: 'vintage', run: (buffer) => stickerEngine.createVintageSticker(buffer) },
   retro: { label: 'vintage', run: (buffer) => stickerEngine.createVintageSticker(buffer) },
@@ -23,6 +26,7 @@ const EFFECTS: Record<string, { label: string; run(buffer: Buffer): Promise<Buff
   glitch: { label: 'glitch', run: (buffer) => stickerEngine.createGlitchSticker(buffer) },
   glitchy: { label: 'glitch', run: (buffer) => stickerEngine.createGlitchSticker(buffer) },
 };
+
 const SUBCOMMANDS: Record<string, Command> = {
   border: BorderStickerCommand,
   text: StickerTextCommand,
@@ -39,21 +43,70 @@ const SUBCOMMANDS: Record<string, Command> = {
   sbrat: SbratStickerCommand,
 };
 
-function parseLeadingOptions(rawArgs = ''): { rawArgs: string; noCrop: boolean } {
-  const trimmed = rawArgs.trim();
-  const noCrop = /^--no-?crop(?:\s|$)/i.test(trimmed);
-  return {
-    noCrop,
-    rawArgs: noCrop ? trimmed.replace(/^--no-?crop(?:\s+|$)/i, '').trim() : trimmed,
-  };
+interface ParsedStickerOptions {
+  noCrop: boolean;
+  shape?: 'circle' | 'rounded';
+  effect?: string;
+  packName?: string;
+  author?: string;
+  helpRequested: boolean;
+  remainingText: string;
 }
 
-function parseStickerArgs(rawArgs = ''): { shape?: 'circle' | 'rounded'; metadata: string } {
-  const trimmed = parseLeadingOptions(rawArgs).rawArgs;
-  const [first = ''] = trimmed.split(/\s+/, 1);
-  const shape = SHAPES.has(first.toLowerCase()) ? first.toLowerCase() as 'circle' | 'rounded' : undefined;
-  const metadata = (shape ? trimmed.slice(first.length) : trimmed).trim().replace(/\s+/g, ' ').slice(0, 64);
-  return { shape, metadata };
+function parseStickerFlags(rawArgs = ''): ParsedStickerOptions {
+  const tokens = rawArgs.trim().split(/\s+/).filter(Boolean);
+  let noCrop = false;
+  let shape: 'circle' | 'rounded' | undefined;
+  let effect: string | undefined;
+  let packName: string | undefined;
+  let author: string | undefined;
+  let helpRequested = false;
+  const remainingTokens: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+
+    if (lower === '--help' || lower === '-h') {
+      helpRequested = true;
+    } else if (lower === '--nocrop' || lower === '--no-crop' || lower === '--nobg') {
+      noCrop = true;
+    } else if (lower === '--circle' || lower === '--round') {
+      shape = 'circle';
+    } else if (lower === '--rounded') {
+      shape = 'rounded';
+    } else if (lower === '--bw' || lower === '--grayscale' || lower === '--blackwhite') {
+      effect = 'bw';
+    } else if (lower === '--sepia') {
+      effect = 'sepia';
+    } else if (lower === '--vintage' || lower === '--retro') {
+      effect = 'vintage';
+    } else if (lower === '--glitch') {
+      effect = 'glitch';
+    } else if (lower === '--cartoon' || lower === '--toon') {
+      effect = 'cartoon';
+    } else if (lower === '--pack' && tokens[i + 1]) {
+      packName = tokens[++i];
+    } else if (lower === '--author' && tokens[i + 1]) {
+      author = tokens[++i];
+    } else if (SHAPES.has(lower) && !shape) {
+      shape = lower as 'circle' | 'rounded';
+    } else if (EFFECTS[lower] && !effect) {
+      effect = lower;
+    } else {
+      remainingTokens.push(token);
+    }
+  }
+
+  return {
+    noCrop,
+    shape,
+    effect,
+    packName,
+    author,
+    helpRequested,
+    remainingText: remainingTokens.join(' ').slice(0, 64),
+  };
 }
 
 function subcommandContext(ctx: BotContext, rawArgs: string): BotContext {
@@ -65,27 +118,8 @@ function subcommandContext(ctx: BotContext, rawArgs: string): BotContext {
 }
 
 async function runSubcommand(ctx: BotContext): Promise<boolean> {
-  const raw = parseLeadingOptions(ctx.rawArgs || ctx.args.join(' ')).rawArgs;
+  const raw = (ctx.rawArgs || ctx.args.join(' ')).trim();
   const [first = ''] = raw.split(/\s+/, 1);
-  const effect = EFFECTS[first.toLowerCase()];
-  if (effect) {
-    const media = await downloadMediaFromContext(ctx, ['image', 'sticker']);
-    if (!media) {
-      await ctx.reply(`Please send or reply to an image/sticker with .s ${first} [metadata]`);
-      return true;
-    }
-
-    try {
-      const metadata = raw.slice(first.length).trim().replace(/\s+/g, ' ').slice(0, 64);
-      const sticker = await stickerEngine
-        .getMetadataManager()
-        .addMetadata(await effect.run(media.buffer), metadata, STICKER_WATERMARK);
-      await ctx.socket.sendMessage(ctx.message.key.remoteJid!, { sticker, mimetype: 'image/webp' }, { quoted: ctx.message });
-    } catch {
-      await ctx.reply(`Failed to create ${effect.label} sticker.`);
-    }
-    return true;
-  }
 
   const command = SUBCOMMANDS[first.toLowerCase()];
   if (!command) return false;
@@ -94,27 +128,53 @@ async function runSubcommand(ctx: BotContext): Promise<boolean> {
   return true;
 }
 
-import { formatUsageError, formatFailed } from '../core/response-formatter';
-
 export const StickerCommand: Command = {
   name: 'sticker',
   aliases: ['s', 'stiker'],
   category: CommandCategory.STICKER,
-  description: 'Convert images/videos into high-quality WhatsApp stickers with effects',
-  usage: 'sticker [--nocrop] [packName|shape|effect]',
+  description: 'Convert images/videos into high-quality WhatsApp stickers with shapes, filters, and pack info',
+  usage: 'sticker [--circle|--rounded] [--nocrop] [--bw|--sepia|--glitch|--cartoon] [--pack <name>] [--author <name>]',
   examples: [
     'sticker',
-    'sticker --nocrop My Pack Name',
-    'sticker circle',
-    'sticker rounded',
-    's sepia',
+    'sticker --circle',
+    'sticker --rounded --bw',
+    'sticker --nocrop --pack "My Cool Pack"',
     's glitch',
-    's brat charli xcx',
+    's sepia',
+    's brat hello world',
   ],
-  inputs: 'Image, GIF, or short video (<10s) attached or quoted',
-  limits: 'Max 10MB media, max 10s video',
+  inputs: 'Attached or quoted image, GIF, or short video (<10s)',
+  limits: 'Max 10MB media, max 10s video length',
   async execute(ctx) {
     if (await runSubcommand(ctx)) return;
+
+    const parsed = parseStickerFlags(ctx.rawArgs || ctx.args.join(' '));
+
+    if (parsed.helpRequested) {
+      const helpText = [
+        `🎨 *Sticker Generator Options & Flags*`,
+        `\n*Shapes:*`,
+        `• \`--circle\` : Crop image into a circle`,
+        `• \`--rounded\` : Crop image with rounded corners`,
+        `\n*Cropping:*`,
+        `• \`--nocrop\` : Preserve original image aspect ratio without smart cropping`,
+        `\n*Visual Effects:*`,
+        `• \`--bw\` : Black & White grayscale`,
+        `• \`--sepia\` : Vintage warm sepia filter`,
+        `• \`--glitch\` : Cyberpunk RGB glitch effect`,
+        `• \`--cartoon\` : Comic book style filter`,
+        `\n*Metadata:*`,
+        `• \`--pack <name>\` : Set sticker pack name`,
+        `• \`--author <name>\` : Set sticker author name`,
+        `\n*Special Subcommands:*`,
+        `• \`.s brat <text>\` : Generate brat aesthetic text sticker`,
+        `• \`.s meme <top>|<bottom>\` : Generate top/bottom meme sticker`,
+        `• \`.s revert\` : Convert sticker back to standard image`,
+        `\n*Usage:* Send an image with caption \`.sticker --circle\` or reply to an existing photo.`,
+      ];
+      await ctx.reply(helpText.join('\n'));
+      return;
+    }
 
     const msg = ctx.message.message;
     if (!msg) return;
@@ -138,13 +198,14 @@ export const StickerCommand: Command = {
       await ctx.reply(
         formatUsageError({
           command: 'sticker',
-          reason: 'No image or video detected in this message or reply.',
+          reason: 'No image or video detected in this message or quoted reply.',
           examples: [
             'sticker (send with image)',
+            'sticker --circle (reply to image)',
             'sticker --nocrop (reply to image)',
-            'sticker circle (reply to image)',
+            'sticker --bw --pack "My Pack"',
           ],
-          hint: 'Send an image with caption .sticker or reply to an existing image/video.',
+          hint: 'Send an image with caption .sticker or reply to an existing image/video. Type .sticker --help for all flags.',
         })
       );
       return;
@@ -156,18 +217,24 @@ export const StickerCommand: Command = {
       for await (const chunk of stream) {
         chunks.push(chunk);
       }
-      const buffer = Buffer.concat(chunks);
+      let buffer: Buffer = Buffer.concat(chunks);
+
+      // Apply effect filter if requested
+      if (parsed.effect && EFFECTS[parsed.effect]) {
+        buffer = Buffer.from(await EFFECTS[parsed.effect].run(buffer));
+      }
 
       let processedBuffer: Buffer;
-      const { noCrop } = parseLeadingOptions(ctx.rawArgs);
-      const { shape, metadata } = parseStickerArgs(ctx.rawArgs);
-      const options = { packName: metadata || config.OWNER_NAME, author: STICKER_WATERMARK };
+      const options = {
+        packName: parsed.packName || parsed.remainingText || config.OWNER_NAME,
+        author: parsed.author || STICKER_WATERMARK,
+      };
 
       if ('mimetype' in media && media.mimetype?.startsWith('image/')) {
-        if (shape) {
-          processedBuffer = await stickerEngine.createShapedSticker(buffer, shape, options);
+        if (parsed.shape) {
+          processedBuffer = await stickerEngine.createShapedSticker(buffer, parsed.shape, options);
         } else {
-          processedBuffer = await stickerEngine.createSticker(buffer, { ...options, smartCrop: !noCrop });
+          processedBuffer = await stickerEngine.createSticker(buffer, { ...options, smartCrop: !parsed.noCrop });
         }
       } else {
         processedBuffer = buffer;
@@ -187,8 +254,8 @@ export const StickerCommand: Command = {
       await ctx.reply(
         formatFailed({
           title: 'Sticker Creation',
-          reason: 'Could not process media into a sticker. File format might not be supported or file is too large.',
-          tryHint: 'Try sending a standard JPEG/PNG image or short MP4 video.',
+          reason: 'Could not process media into a sticker. File format might not be supported or file exceeds 10MB.',
+          tryHint: 'Try sending a standard JPEG/PNG image or short MP4 video (<10s).',
         })
       );
     }

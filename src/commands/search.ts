@@ -360,19 +360,57 @@ export const WikipediaCommand: Command = {
 
 export const GitHubSearchCommand: Command = {
   name: 'github',
-  aliases: ['gh', 'ghsearch'],
+  aliases: ['gh', 'ghsearch', 'repo'],
   category: CommandCategory.SEARCH,
-  description: 'Search GitHub repositories with stars, forks, and language',
-  usage: 'github <query>',
+  description: 'Search open-source GitHub repositories with language and sorting filters',
+  usage: 'github <query> [--language <lang>] [--sort <stars|forks|updated>]',
+  examples: [
+    'github whatsapp bot',
+    'github react --language typescript',
+    'github fast-api --sort stars',
+  ],
+  inputs: 'Search query and optional filter flags',
   async execute(ctx) {
-    const query = ctx.args.join(' ').trim();
+    let language: string | undefined;
+    let sort = 'stars';
+    const queryParts: string[] = [];
+
+    for (let i = 0; i < ctx.args.length; i++) {
+      const arg = ctx.args[i];
+      const lower = arg.toLowerCase();
+      if ((lower === '--language' || lower === '--lang' || lower === '-l') && ctx.args[i + 1]) {
+        language = ctx.args[++i];
+      } else if (lower === '--sort' && ctx.args[i + 1]) {
+        const s = ctx.args[++i].toLowerCase();
+        if (['stars', 'forks', 'updated'].includes(s)) sort = s;
+      } else {
+        queryParts.push(arg);
+      }
+    }
+
+    const query = queryParts.join(' ').trim();
     if (!query) {
-      await ctx.reply('Usage: .github <repository or topic>\nExample: .github baileys');
+      await ctx.reply(
+        formatUsageError({
+          command: 'github',
+          reason: 'Repository keyword or topic is required.',
+          examples: [
+            'github baileys',
+            'github telegram bot --language python',
+            'github ai agent --sort stars',
+          ],
+          hint: 'Flags: --language <lang> (e.g. typescript, python, rust), --sort <stars|forks|updated>.',
+        })
+      );
       return;
     }
 
     try {
-      const data = getObject(await fetchJson(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`, {
+      let finalQuery = query;
+      if (language) finalQuery += ` language:${language}`;
+
+      const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(finalQuery)}&sort=${sort}&order=desc&per_page=5`;
+      const data = getObject(await fetchJson(url, {
         accept: 'application/vnd.github.v3+json',
         'user-agent': 'WhatsAppHybridBot/1.0',
       }));
@@ -382,23 +420,33 @@ export const GitHubSearchCommand: Command = {
         const repos = items.slice(0, 5).map((item, index) => {
           const repo = getObject(item);
           const fullName = getString(repo?.full_name);
-          const description = getString(repo?.description) || 'No description';
+          const description = getString(repo?.description) || 'No description provided.';
           const stars = Number(repo?.stargazers_count || 0).toLocaleString();
           const forks = Number(repo?.forks_count || 0).toLocaleString();
-          const language = getString(repo?.language) || 'General';
-          const url = getString(repo?.html_url);
+          const lang = getString(repo?.language) || 'General';
+          const repoUrl = getString(repo?.html_url);
 
-          return `${index + 1}. *${fullName}* (⭐ ${stars} | 🍴 ${forks} | ${language})\n${description}\n${url}`;
+          return `${index + 1}. 📦 *${fullName}*\n   ⭐ ${stars} stars • 🍴 ${forks} forks • 💻 ${lang}\n   _${description.slice(0, 140)}_\n   🔗 ${repoUrl}`;
         });
 
-        await ctx.reply(`*GitHub Repositories for "${query}"*\n\n${repos.join('\n\n')}`);
+        await ctx.reply(
+          `🐙 *GitHub Search: "${query}"*${language ? ` (${language})` : ''}\n\n` +
+          `${repos.join('\n\n')}\n\n` +
+          `🔍 _Sorted by ${sort}._`
+        );
         return;
       }
     } catch {
       // Fallback
     }
 
-    await ctx.reply(`GitHub search: https://github.com/search?q=${encodeURIComponent(query)}`);
+    await ctx.reply(
+      formatFailed({
+        title: 'GitHub Search',
+        reason: `No repositories found matching "${query}".`,
+        tryHint: `Browse directly at https://github.com/search?q=${encodeURIComponent(query)}`,
+      })
+    );
   },
 };
 

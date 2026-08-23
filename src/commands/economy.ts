@@ -21,6 +21,23 @@ export interface ItemDefinition {
   category: 'material' | 'catch' | 'mineral' | 'crop' | 'consumable' | 'trophy';
 }
 
+export interface PlayerTransaction {
+  type: string;
+  amount: number;
+  description: string;
+  timestamp: number;
+}
+
+export interface PlayerQuests {
+  date: string;
+  hunts: number;
+  fishes: number;
+  mines: number;
+  farms: number;
+  boss: number;
+  claimed: string[];
+}
+
 export interface Player {
   jid: string;
   name: string;
@@ -45,6 +62,8 @@ export interface Player {
     farms?: number;
     bossWins?: number;
   };
+  history?: PlayerTransaction[];
+  quests?: PlayerQuests;
   pet?: {
     name: string;
     type: string;
@@ -229,6 +248,24 @@ function ensurePlayerDefaults(p: Player): void {
   p.stats ||= { hunts: 0, fishes: 0, mines: 0, farms: 0, bossWins: 0 };
   p.cooldowns ||= {};
   p.inventory ||= {};
+  p.history ||= [];
+  p.quests ||= { date: today(), hunts: 0, fishes: 0, mines: 0, farms: 0, boss: 0, claimed: [] };
+  if (p.quests.date !== today()) {
+    p.quests = { date: today(), hunts: 0, fishes: 0, mines: 0, farms: 0, boss: 0, claimed: [] };
+  }
+}
+
+function logTransaction(target: Player, type: string, amount: number, description: string): void {
+  target.history ||= [];
+  target.history.unshift({
+    type,
+    amount,
+    description,
+    timestamp: Date.now(),
+  });
+  if (target.history.length > 20) {
+    target.history.length = 20;
+  }
 }
 
 function player(state: EconomyState, ctx: BotContext): Player {
@@ -1388,6 +1425,209 @@ export const ClanCommand: Command = {
   },
 };
 
+export const CooldownsCommand: Command = {
+  name: 'cooldowns',
+  aliases: ['cd', 'timers', 'cooldown'],
+  category: CommandCategory.ECONOMY,
+  description: 'Check all remaining activity cooldown timers and available actions',
+  usage: 'cooldowns',
+  examples: ['cooldowns', 'cd'],
+  async execute(ctx) {
+    const state = loadState();
+    const me = player(state, ctx);
+    const now = Math.floor(Date.now() / 1000);
+
+    const getStatus = (action: string, cdSec: number) => {
+      const last = me.cooldowns?.[action] || 0;
+      const elapsed = now - last;
+      if (elapsed >= cdSec) return '✅ *Ready*';
+      return `⏳ *${formatDuration(cdSec - elapsed)} remaining*`;
+    };
+
+    const dailyStatus = me.lastDaily === today() ? '⏳ *Claimed (Resets at 00:00 UTC)*' : '✅ *Ready to claim! (.daily)*';
+
+    const lines = [
+      `⏱️ *Activity Cooldowns: ${me.name}*`,
+      `\n🎁 *Daily Bonus:* ${dailyStatus}`,
+      `🏹 *Hunting (.hunt):* ${getStatus('hunt', 180)}`,
+      `🎣 *Fishing (.fish):* ${getStatus('fish', 180)}`,
+      `⛏️ *Mining (.mine):* ${getStatus('mine', 180)}`,
+      `🌾 *Farming (.farm):* ${getStatus('farm', 180)}`,
+      `💀 *Dungeon Boss (.boss):* ${getStatus('boss', 900)}`,
+      `🥷 *Robbery (.rob):* ${getStatus('rob', 600)}`,
+      `🎰 *Gamble (.gamble):* ${getStatus('gamble', 10)}`,
+      `\n💡 _Tip: Upgrade your tools with .upgrade to increase rewards!_`,
+    ];
+
+    await ctx.reply(lines.join('\n'));
+  },
+};
+
+export const StatsCommand: Command = {
+  name: 'stats',
+  aliases: ['stat', 'rpgstats', 'gamestats'],
+  category: CommandCategory.ECONOMY,
+  description: 'View in-depth RPG lifetime statistics and achievements',
+  usage: 'stats [@user]',
+  examples: ['stats', 'rpgstats', 'stats @user'],
+  async execute(ctx) {
+    const state = loadState();
+    const target = targetJid(ctx);
+    const p = target ? targetPlayer(state, target) : player(state, ctx);
+
+    const lvl = levelForXp(p.xp);
+    const prevLvlXp = (lvl - 1) * (lvl - 1) * 100;
+    const nextLvlXp = lvl * lvl * 100;
+    const currentProgress = Math.max(0, p.xp - prevLvlXp);
+    const totalRequired = Math.max(1, nextLvlXp - prevLvlXp);
+    const pct = Math.min(100, Math.floor((currentProgress / totalRequired) * 100));
+
+    const totalBars = 10;
+    const filledBars = Math.floor((pct / 100) * totalBars);
+    const progressBar = '█'.repeat(filledBars) + '░'.repeat(totalBars - filledBars);
+
+    const totalItems = Object.values(p.inventory).reduce((acc, c) => acc + c, 0);
+
+    const lines = [
+      `📊 *RPG Statistics: ${p.name}*`,
+      `⭐ *Level:* ${lvl} (${p.xp.toLocaleString()} XP)`,
+      `📈 *Progress:* [${progressBar}] ${pct}% (${currentProgress.toLocaleString()} / ${totalRequired.toLocaleString()} XP to Lvl ${lvl + 1})`,
+      `\n💰 *Finances:*`,
+      `• Wallet: ${money(p.wallet)}`,
+      `• Bank: ${money(p.bank)}`,
+      `• Total Net Worth: ${money(p.wallet + p.bank)}`,
+      `• Inventory Capacity: ${totalItems.toLocaleString()} items (${Object.keys(p.inventory).length} types)`,
+      `\n🏹 *Lifetime Activities:*`,
+      `• Hunting Expeditions: ${(p.stats?.hunts || 0).toLocaleString()}`,
+      `• Fishing Catches: ${(p.stats?.fishes || 0).toLocaleString()}`,
+      `• Cavern Excavations: ${(p.stats?.mines || 0).toLocaleString()}`,
+      `• Farm Harvests: ${(p.stats?.farms || 0).toLocaleString()}`,
+      `• Dungeon Boss Triumphs: ${(p.stats?.bossWins || 0).toLocaleString()}`,
+      p.pet ? `\n🐾 *Companion:* ${p.pet.name} (Lvl ${skillLevel(p.pet.xp)} ${p.pet.type}, Hunger: ${p.pet.hunger}/100)` : undefined,
+    ].filter(Boolean);
+
+    await ctx.reply(lines.join('\n'));
+  },
+};
+
+export const QuestsCommand: Command = {
+  name: 'quests',
+  aliases: ['quest', 'tasks', 'dailyquests'],
+  category: CommandCategory.ECONOMY,
+  description: 'View and claim rewards for daily adventurer quests',
+  usage: 'quests [claim <all|quest_id>]',
+  examples: ['quests', 'quests claim 1', 'quests claim all'],
+  async execute(ctx) {
+    const state = loadState();
+    const me = player(state, ctx);
+
+    me.quests ||= { date: today(), hunts: 0, fishes: 0, mines: 0, farms: 0, boss: 0, claimed: [] };
+    if (me.quests.date !== today()) {
+      me.quests = { date: today(), hunts: 0, fishes: 0, mines: 0, farms: 0, boss: 0, claimed: [] };
+    }
+
+    const questList = [
+      { id: '1', title: 'Wild Game Tracker', goal: 'Hunt 3 times', count: me.quests.hunts, target: 3, rewardCoins: 350, rewardXp: 75 },
+      { id: '2', title: 'Deep River Angler', goal: 'Fish 3 times', count: me.quests.fishes, target: 3, rewardCoins: 350, rewardXp: 75 },
+      { id: '3', title: 'Subterranean Miner', goal: 'Mine 3 times', count: me.quests.mines, target: 3, rewardCoins: 350, rewardXp: 75 },
+      { id: '4', title: 'Abundant Harvest', goal: 'Farm 3 times', count: me.quests.farms, target: 3, rewardCoins: 350, rewardXp: 75 },
+      { id: '5', title: 'Titan Vanquisher', goal: 'Defeat 1 Dungeon Boss', count: me.quests.boss, target: 1, rewardCoins: 800, rewardXp: 200 },
+    ];
+
+    const action = (ctx.args[0] || '').toLowerCase();
+    const targetId = (ctx.args[1] || '').toLowerCase();
+
+    if (action === 'claim') {
+      let totalCoins = 0;
+      let totalXp = 0;
+      const claimedTitles: string[] = [];
+
+      for (const q of questList) {
+        if (targetId && targetId !== 'all' && targetId !== q.id) continue;
+        if (me.quests.claimed.includes(q.id)) continue;
+        if (q.count >= q.target) {
+          me.quests.claimed.push(q.id);
+          totalCoins += q.rewardCoins;
+          totalXp += q.rewardXp;
+          claimedTitles.push(`• *${q.title}:* +${money(q.rewardCoins)}, +${q.rewardXp} XP`);
+        }
+      }
+
+      if (!totalCoins) {
+        await ctx.reply('⚠️ No completed unclaimed quests found.');
+        return;
+      }
+
+      me.wallet += totalCoins;
+      const { leveledUp, newLevel } = addXp(me, totalXp);
+      logTransaction(me, 'quest', totalCoins, `Claimed ${claimedTitles.length} daily quests`);
+      saveState(state);
+
+      let msg = `📜 *Quests Claimed!*\n\n${claimedTitles.join('\n')}\n\n*Total:* +${money(totalCoins)}, +${totalXp} XP\nWallet: ${money(me.wallet)}`;
+      if (leveledUp) {
+        msg += `\n\n🎉 *Level Up!* You advanced to Level ${newLevel}!`;
+      }
+      await ctx.reply(msg);
+      return;
+    }
+
+    const rendered = questList.map((q) => {
+      const done = q.count >= q.target;
+      const claimed = me.quests?.claimed.includes(q.id);
+      const statusIcon = claimed ? '🎁 *[CLAIMED]*' : done ? '✨ *[COMPLETED - .quests claim ' + q.id + ']*' : `⏳ [${q.count}/${q.target}]`;
+      return `*#${q.id}. ${q.title}*\n• Objective: ${q.goal} ${statusIcon}\n• Reward: ${money(q.rewardCoins)} + ${q.rewardXp} XP`;
+    });
+
+    const text = [
+      `📜 *Daily Quest Board (${today()})*`,
+      `\n${rendered.join('\n\n')}`,
+      `\n💡 _Claim completed quests with: \`.quests claim <id>\` or \`.quests claim all\`_`,
+    ].join('\n');
+
+    await ctx.reply(text);
+  },
+};
+
+export const BuyCommand: Command = {
+  name: 'buy',
+  aliases: ['purchase'],
+  category: CommandCategory.ECONOMY,
+  description: 'Quickly buy items directly from the village shop',
+  usage: 'buy <item> [qty]',
+  examples: ['buy bait 5', 'buy seed 10', 'buy potion 2', 'buy elixir 1'],
+  inputs: 'Item code and quantity',
+  async execute(ctx) {
+    ctx.args = ['buy', ...ctx.args];
+    await ShopCommand.execute(ctx);
+  },
+};
+
+export const HistoryCommand: Command = {
+  name: 'history',
+  aliases: ['transactions', 'ecohistory', 'trans'],
+  category: CommandCategory.ECONOMY,
+  description: 'View your recent economic transactions and activity history',
+  usage: 'history',
+  examples: ['history', 'transactions'],
+  async execute(ctx) {
+    const state = loadState();
+    const me = player(state, ctx);
+
+    if (!me.history || !me.history.length) {
+      await ctx.reply(`📜 *Transaction History: ${me.name}*\n\nNo recent transactions recorded.`);
+      return;
+    }
+
+    const lines = me.history.slice(0, 10).map((t, idx) => {
+      const timeStr = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const sign = t.amount >= 0 ? '+' : '';
+      return `${idx + 1}. [${timeStr}] *${t.description}* (${sign}${money(t.amount)})`;
+    });
+
+    await ctx.reply(`📜 *Recent Transactions: ${me.name}*\n\n${lines.join('\n')}\n\nCurrent Wallet: *${money(me.wallet)}* | Bank: *${money(me.bank)}*`);
+  },
+};
+
 export const EconomyCommands: Command[] = [
   EconomyProfileCommand,
   BalanceCommand,
@@ -1395,6 +1635,7 @@ export const EconomyCommands: Command[] = [
   BankCommand,
   TransferCommand,
   ShopCommand,
+  BuyCommand,
   InventoryCommand,
   SellCommand,
   UpgradeCommand,
@@ -1406,6 +1647,10 @@ export const EconomyCommands: Command[] = [
   RobCommand,
   BossCommand,
   LeaderboardCommand,
+  CooldownsCommand,
+  StatsCommand,
+  QuestsCommand,
+  HistoryCommand,
   CraftCommand,
   PetCommand,
   ClanCommand,
