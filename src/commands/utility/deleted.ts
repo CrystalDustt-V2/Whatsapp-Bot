@@ -134,12 +134,23 @@ async function sendRecoveredMedia(
   });
 }
 
+import { formatUsageError, formatFailed } from '../../core/response-formatter';
+
 export const DeletedMessageCommand: Command = {
   name: 'deleted',
   aliases: ['antidelete', 'undelete', 'revoke'],
   category: CommandCategory.UTILITY,
-  description: 'Recover deleted messages with multi-page support (Owner) or current chat (Users)',
+  description: 'Recover deleted messages and media with multi-page support (Owner) or current chat (Users)',
   usage: 'deleted [list [page]|chats|number]',
+  examples: [
+    'deleted',
+    'deleted list',
+    'deleted list 2',
+    'deleted 1',
+    'deleted chats',
+  ],
+  inputs: 'Subcommand (list, chats) or message index number',
+  limits: 'Can only recover messages witnessed by the bot while running',
   async execute(ctx) {
     const isOwner = isOwnerOrSelf(ctx);
     const currentChatJid = ctx.message.key.remoteJid || ctx.sender.chatJid;

@@ -157,7 +157,7 @@ async function playMusic(ctx: Parameters<Command['execute']>[0], input: string, 
   }
   const audio = await downloadFirstAudio(sources);
   await sendAudio(ctx, audio.buffer, audio.mimetype);
-  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input, audio.match, audio.audioSourceName);
+  await sendMusicInfo(ctx, audio.info, audio.platformName || platform?.name, input, audio.match, audio.audioSourceName, (audio as any).fromCache);
 }
 
 function spotifyDownloadSources(spotifyMatch: SpotifyTrackMatch): MusicSource[] {
@@ -500,28 +500,37 @@ async function spotifyMatchForRequest(input: string, url?: URL): Promise<Spotify
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function sendMusicInfo(
   ctx: Parameters<Command['execute']>[0],
   info?: DownloadedMediaInfo,
   platformName?: string,
   requested?: string,
   match?: SpotifyTrackMatch,
-  audioSourceName?: string
+  audioSourceName?: string,
+  fromCache = false
 ): Promise<void> {
   if (!info) return;
 
+  const title = match?.title || info.title || requested || 'Audio Track';
+  const artist = match?.artists || info.uploader || 'Various Artists';
+  const duration = info.duration || 'N/A';
+  const platform = platformName ? prettyPlatform(platformName) : prettyPlatform(info.extractor);
+  const sourceUrl = match?.url || info.webpageUrl;
+
   const lines = [
-    'Music info',
-    requested && !parseHttpUrl(requested) ? `Requested: ${requested}` : undefined,
-    match ? `Spotify match: ${match.title} - ${match.artists}` : undefined,
-    match?.album ? `Album: ${match.album}` : undefined,
-    match?.url ? `Spotify link: ${match.url}` : undefined,
-    info.title ? `Result title: ${info.title}` : undefined,
-    info.uploader ? `Uploader: ${info.uploader}` : undefined,
-    `Matched via: ${platformName || prettyPlatform(info.extractor)}`,
-    audioSourceName && audioSourceName !== platformName ? `Audio source: ${audioSourceName}` : undefined,
-    info.duration ? `Duration: ${info.duration}` : undefined,
-    info.webpageUrl ? `Download source: ${info.webpageUrl}` : undefined,
+    `🎵 *Now Playing: ${title}*`,
+    `👤 *Artist / Channel:* ${artist}`,
+    match?.album ? `💿 *Album:* ${match.album}` : undefined,
+    `⏱️ *Duration:* ${duration}`,
+    `🌐 *Platform:* ${platform}${fromCache ? ' ⚡ (Instant Cache)' : ''}`,
+    audioSourceName && audioSourceName !== platformName ? `🔊 *Stream Source:* ${prettyPlatform(audioSourceName)}` : undefined,
+    sourceUrl ? `🔗 *Track Link:* ${sourceUrl}` : undefined,
   ].filter(Boolean);
 
   await ctx.socket.sendMessage(ctx.message.key.remoteJid!, { text: lines.join('\n'), linkPreview: null });
@@ -556,9 +565,12 @@ function playFailure(err: unknown): string {
   if (message.includes('JS runtime/EJS')) return 'YouTube needs a JS runtime/EJS solver. Configure YT_DLP_JS_RUNTIME and YT_DLP_REMOTE_COMPONENTS.';
   if (message.includes('DRM')) return 'That source uses DRM and cannot be downloaded.';
   if (message.includes('Spotify metadata lookup failed')) return 'Spotify track links need SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, or Spotify did not return that track.';
-  if (message.includes('too large')) return 'The audio file is over 20 MB.';
-  return 'The source did not provide downloadable audio.';
+  if (message.includes('exceeds the allowable limit')) return 'The media duration exceeds maximum allowed limit (Max 15m video / 30m audio).';
+  if (message.includes('too large')) return 'The file exceeds the maximum download size (Max 50MB video / 20MB audio).';
+  return 'The source did not provide downloadable audio/video.';
 }
+
+import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 function createMusicCommand(platform: MusicPlatform): Command {
   const isSpotify = platform.name === platforms.spotify.name;
@@ -570,18 +582,34 @@ function createMusicCommand(platform: MusicPlatform): Command {
       ? 'Use Spotify metadata to find and play matching audio'
       : `Play music from ${platform.name} as audio`,
     usage: `${platform.name} <song name|url>`,
+    examples: [`${platform.name} bohemian rhapsody`, `${platform.name} https://...`],
+    inputs: 'Song title, artist name, or platform track URL',
+    limits: 'Max 20MB audio stream, max 30m duration',
     async execute(ctx) {
       const query = ctx.args.join(' ').trim();
       if (!query) {
-        await ctx.reply(`Usage: .${platform.name} <song name|url>`);
+        await ctx.reply(
+          formatUsageError({
+            command: platform.name,
+            reason: 'Song name or URL is required.',
+            examples: [`${platform.name} blinding lights`, `${platform.name} https://...`],
+            hint: `Search tracks specifically on ${platform.name}.`,
+          })
+        );
         return;
       }
 
       try {
-        await ctx.reply(`Playing ${platform.name} audio...`);
+        await ctx.reply(`🎵 Finding and streaming ${platform.name} audio...`);
         await playMusic(ctx, query, platform);
       } catch (err) {
-        await ctx.reply(`Could not play audio from that ${platform.name} request. ${playFailure(err)}`);
+        await ctx.reply(
+          formatFailed({
+            title: `${platform.name} Audio`,
+            reason: playFailure(err),
+            tryHint: 'Try another search query or use .play <title>',
+          })
+        );
       }
     },
   };
@@ -589,22 +617,39 @@ function createMusicCommand(platform: MusicPlatform): Command {
 
 export const PlayCommand: Command = {
   name: 'play',
-  aliases: [],
+  aliases: ['song', 'music'],
   category: CommandCategory.DOWNLOADER,
-  description: 'Search and play the best matching music result as audio',
+  description: 'Search and stream the best matching music audio across platforms',
   usage: 'play [youtube|spotify|soundcloud|newgrounds] <song name|url>',
+  examples: ['play bohemian rhapsody', 'play spotify starboy', 'play https://youtu.be/...'],
+  inputs: 'Song title, artist name, or direct music URL',
+  limits: 'Max 20MB audio stream, max 30m duration',
   async execute(ctx) {
     const { query, platform } = parsePlayArgs(ctx.args);
     if (!query) {
-      await ctx.reply('Usage: .play [youtube|spotify|soundcloud|newgrounds] <song name|url>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'play',
+          reason: 'Song name or music URL is required.',
+          customUsage: 'play [platform] <song name|url>',
+          examples: ['play lofi hip hop', 'play spotify stay with me', 'play https://youtu.be/...'],
+          hint: 'Searches YouTube Music, Spotify, SoundCloud, and Newgrounds automatically.',
+        })
+      );
       return;
     }
 
     try {
-      await ctx.reply(platform ? `Finding ${platform.name} audio...` : 'Finding the best audio result...');
+      await ctx.reply(platform ? `🎵 Finding ${platform.name} audio...` : '🎵 Finding the best matching audio result...');
       await playMusic(ctx, query, platform);
     } catch (err) {
-      await ctx.reply(`Could not play audio for that request. ${playFailure(err)}`);
+      await ctx.reply(
+        formatFailed({
+          title: 'Music Playback',
+          reason: playFailure(err),
+          tryHint: 'Check the spelling of the song name or provide a direct video/track link.',
+        })
+      );
     }
   },
 };
@@ -618,17 +663,27 @@ export const YouTubeVideoCommand: Command = {
   name: 'ytvideo',
   aliases: ['ytmp4', 'youtubevideo', 'ytdl', 'ytv'],
   category: CommandCategory.DOWNLOADER,
-  description: 'Download YouTube video as MP4',
+  description: 'Download YouTube video as high-quality MP4',
   usage: 'ytvideo <song/video name|url>',
+  examples: ['ytvideo lofi hip hop radio', 'ytvideo https://www.youtube.com/watch?v=...'],
+  inputs: 'Video title or YouTube URL',
+  limits: 'Max 50MB video file, max 15m duration',
   async execute(ctx) {
     const input = ctx.args.join(' ').trim();
     if (!input) {
-      await ctx.reply('Usage: .ytvideo <song/video name or YouTube URL>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'ytvideo',
+          reason: 'Video title or YouTube URL is required.',
+          examples: ['ytvideo lofi hip hop', 'ytvideo https://youtu.be/...'],
+          hint: 'Downloads the video directly in MP4 format (Max 15 minutes).',
+        })
+      );
       return;
     }
 
     try {
-      await ctx.reply('Fetching and downloading YouTube video...');
+      await ctx.reply('🎬 Downloading YouTube video, please wait...');
       let targetUrl = input;
       if (!/^https?:\/\//i.test(input)) {
         const results = await searchYtDlp(`ytsearch1:${input}`, 1);
@@ -637,10 +692,12 @@ export const YouTubeVideoCommand: Command = {
 
       const video = await downloadYtDlpVideoFile(targetUrl);
       const lines = [
-        '*YouTube Video*',
-        video.info?.title ? `Title: ${video.info.title}` : undefined,
-        video.info?.uploader ? `Channel: ${video.info.uploader}` : undefined,
-        video.info?.duration ? `Duration: ${video.info.duration}` : undefined,
+        `🎬 *YouTube Video: ${video.info?.title || 'Video'}*`,
+        video.info?.uploader ? `📺 *Channel:* ${video.info.uploader}` : undefined,
+        video.info?.duration ? `⏱️ *Duration:* ${video.info.duration}` : undefined,
+        `📦 *Quality:* 720p HD MP4`,
+        `💾 *Size:* ${formatBytes(video.buffer.byteLength)}${video.fromCache ? ' ⚡ (Instant Cache)' : ''}`,
+        video.info?.webpageUrl ? `🔗 *Link:* ${video.info.webpageUrl}` : undefined,
       ].filter(Boolean);
 
       await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
@@ -649,7 +706,13 @@ export const YouTubeVideoCommand: Command = {
         caption: lines.join('\n'),
       });
     } catch (err) {
-      await ctx.reply(`Could not download that YouTube video. ${playFailure(err)}`);
+      await ctx.reply(
+        formatFailed({
+          title: 'YouTube Video Download',
+          reason: playFailure(err),
+          tryHint: 'Ensure the video is public and under 15 minutes in duration.',
+        })
+      );
     }
   },
 };

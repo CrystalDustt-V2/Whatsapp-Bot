@@ -89,6 +89,8 @@ async function readDownloadedFile(dir: string, prefix: string, maxBytes: number,
   return { buffer: await readFile(filePath), name: file };
 }
 
+import mediaCache from './media-cache';
+
 async function runYtDlp(args: string[]): Promise<string> {
   const cookiesPath = process.env.YT_DLP_COOKIES_PATH?.trim();
   const jsRuntime = process.env.YT_DLP_JS_RUNTIME?.trim();
@@ -122,6 +124,9 @@ async function runYtDlp(args: string[]): Promise<string> {
       throw new Error('YouTube needs a JS runtime/EJS solver on this server');
     }
     if (/known to use DRM|DRM protection/i.test(stderr)) throw new Error('Source uses DRM and cannot be downloaded');
+    if (/does not pass filter.*duration|duration\s*<=/i.test(stderr)) {
+      throw new Error('Media duration exceeds the allowable limit (Max 15m video / 30m audio).');
+    }
     logger.warn(
       {
         code,
@@ -206,9 +211,15 @@ export type DownloadedVideo = {
   buffer: Buffer;
   mimetype: string;
   info?: DownloadedMediaInfo;
+  fromCache?: boolean;
 };
 
 export async function downloadYtDlpVideoFile(url: string): Promise<DownloadedVideo> {
+  const cached = mediaCache.getVideo(url);
+  if (cached) {
+    return { ...cached, fromCache: true };
+  }
+
   const dir = await mkdtemp(path.join(tmpdir(), 'media-video-'));
   const output = path.join(dir, 'video.%(ext)s');
 
@@ -217,6 +228,8 @@ export async function downloadYtDlpVideoFile(url: string): Promise<DownloadedVid
       '--no-playlist',
       '--max-filesize',
       `${MAX_VIDEO_BYTES}`,
+      '--match-filter',
+      'duration <= 900',
       '-f',
       'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
       '--merge-output-format',
@@ -237,7 +250,9 @@ export async function downloadYtDlpVideoFile(url: string): Promise<DownloadedVid
     ]);
 
     const file = await readDownloadedFile(dir, 'video.', MAX_VIDEO_BYTES, 'Video');
-    return { buffer: file.buffer, mimetype: 'video/mp4', info: parseYtDlpInfo(stdout) };
+    const result: DownloadedVideo = { buffer: file.buffer, mimetype: 'video/mp4', info: parseYtDlpInfo(stdout) };
+    mediaCache.setVideo(url, result);
+    return result;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -247,7 +262,12 @@ export async function downloadYtDlpVideo(url: string): Promise<Buffer> {
   return (await downloadYtDlpVideoFile(url)).buffer;
 }
 
-export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAudio> {
+export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAudio & { fromCache?: boolean }> {
+  const cached = mediaCache.getAudio(url);
+  if (cached) {
+    return { ...cached, fromCache: true };
+  }
+
   const dir = await mkdtemp(path.join(tmpdir(), 'media-audio-'));
   const output = path.join(dir, 'audio.%(ext)s');
 
@@ -256,6 +276,8 @@ export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAud
       '--no-playlist',
       '--max-filesize',
       `${MAX_AUDIO_BYTES}`,
+      '--match-filter',
+      'duration <= 1800',
       '-f',
       'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
       '--print',
@@ -274,7 +296,9 @@ export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAud
     ]);
 
     const file = await readDownloadedFile(dir, 'audio.', MAX_AUDIO_BYTES, 'Audio');
-    return { buffer: file.buffer, mimetype: audioMimeType(file.name), info: parseYtDlpInfo(stdout) };
+    const result: DownloadedAudio = { buffer: file.buffer, mimetype: audioMimeType(file.name), info: parseYtDlpInfo(stdout) };
+    mediaCache.setAudio(url, result);
+    return result;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

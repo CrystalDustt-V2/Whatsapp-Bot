@@ -2,7 +2,8 @@ import type { GroupMetadata, GroupParticipant, WAMessageKey } from '@whiskeysock
 import * as fs from 'fs';
 import * as path from 'path';
 import config from '../config';
-import { Command, CommandCategory } from '../types';
+import { Command, CommandCategory, PermissionLevel } from '../types';
+import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 type GroupContext = Parameters<Command['execute']>[0];
 type Target = { jid: string; fromArg: boolean };
@@ -234,8 +235,11 @@ export const KickCommand: Command = {
   name: 'kick',
   aliases: ['remove', 'ban'],
   category: CommandCategory.GROUP,
-  description: 'Remove a member from the group, admin only',
+  description: 'Remove a member from the group (Admin only)',
   usage: 'kick @user|<number>',
+  examples: ['kick @user', 'kick 628123456789'],
+  inputs: 'Mention @user or phone number (or reply to user message)',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     await updateParticipant(ctx, 'remove', 'Removed');
   },
@@ -245,8 +249,11 @@ export const PromoteCommand: Command = {
   name: 'promote',
   aliases: ['makeadmin'],
   category: CommandCategory.GROUP,
-  description: 'Promote a group member to admin',
+  description: 'Promote a group member to admin (Admin only)',
   usage: 'promote @user|<number>',
+  examples: ['promote @user', 'promote 628123456789'],
+  inputs: 'Mention @user or phone number (or reply to user message)',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     await updateParticipant(ctx, 'promote', 'Promoted');
   },
@@ -256,8 +263,11 @@ export const DemoteCommand: Command = {
   name: 'demote',
   aliases: ['unadmin'],
   category: CommandCategory.GROUP,
-  description: 'Demote a group admin',
+  description: 'Demote a group admin to regular member (Admin only)',
   usage: 'demote @user|<number>',
+  examples: ['demote @user', 'demote 628123456789'],
+  inputs: 'Mention @user or phone number (or reply to user message)',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     await updateParticipant(ctx, 'demote', 'Demoted');
   },
@@ -267,23 +277,38 @@ export const GroupModeCommand: Command = {
   name: 'groupmode',
   aliases: ['groupchat', 'gcsetting'],
   category: CommandCategory.GROUP,
-  description: 'Open or close group chat, admin only',
+  description: 'Open or close group chat messages (Admin only)',
   usage: 'groupmode <open|close>',
+  examples: ['groupmode open', 'groupmode close'],
+  inputs: 'Option: "open" (all members) or "close" (admins only)',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const mode = (ctx.args[0] || '').toLowerCase();
     if (!['open', 'close'].includes(mode)) {
-      await ctx.reply('Usage: .groupmode <open|close>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'groupmode',
+          reason: 'Specify whether to open or close the group.',
+          examples: ['groupmode open', 'groupmode close'],
+          hint: 'open = all members can send messages; close = announcement mode (admins only).',
+        })
+      );
       return;
     }
 
     try {
       await ctx.socket.groupSettingUpdate(group.id, mode === 'close' ? 'announcement' : 'not_announcement');
-      await ctx.reply(mode === 'close' ? 'Group chat is now admin-only.' : 'Group chat is now open to all members.');
+      await ctx.reply(mode === 'close' ? '🔒 Group chat is now admin-only.' : '🔓 Group chat is now open to all members.');
     } catch {
-      await ctx.reply('Could not update group chat mode.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Group Mode Update',
+          reason: 'Could not change group chat settings. Check bot admin rights.',
+        })
+      );
     }
   },
 };
@@ -292,17 +317,24 @@ export const GroupLinkCommand: Command = {
   name: 'grouplink',
   aliases: ['gclink', 'invitelink'],
   category: CommandCategory.GROUP,
-  description: 'Show the group invite link, admin only',
+  description: 'Fetch the active group invite link (Admin only)',
   usage: 'grouplink',
+  examples: ['grouplink'],
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     try {
       const code = await ctx.socket.groupInviteCode(group.id);
-      await ctx.reply(code ? `https://chat.whatsapp.com/${code}` : 'No group invite link available.');
+      await ctx.reply(code ? `🔗 *Group Invite Link:*\nhttps://chat.whatsapp.com/${code}` : 'No group invite link available.');
     } catch {
-      await ctx.reply('Could not get the group invite link.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Group Link Lookup',
+          reason: 'Could not fetch invite link. Ensure the bot is an admin.',
+        })
+      );
     }
   },
 };
@@ -311,17 +343,24 @@ export const ResetLinkCommand: Command = {
   name: 'resetlink',
   aliases: ['newlink', 'relink'],
   category: CommandCategory.GROUP,
-  description: 'Reset the group invite link, admin only',
+  description: 'Revoke and reset the group invite link (Admin only)',
   usage: 'resetlink',
+  examples: ['resetlink'],
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     try {
       const code = await ctx.socket.groupRevokeInvite(group.id);
-      await ctx.reply(code ? `Invite link reset:\nhttps://chat.whatsapp.com/${code}` : 'Invite link reset.');
+      await ctx.reply(code ? `🔄 *Invite link reset successfully!*\nNew Link: https://chat.whatsapp.com/${code}` : 'Invite link reset.');
     } catch {
-      await ctx.reply('Could not reset the group invite link.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Reset Invite Link',
+          reason: 'Could not reset group link. Ensure the bot is an admin.',
+        })
+      );
     }
   },
 };
@@ -330,23 +369,37 @@ export const SetSubjectCommand: Command = {
   name: 'setsubject',
   aliases: ['setname', 'gcname'],
   category: CommandCategory.GROUP,
-  description: 'Change the group name, admin only',
+  description: 'Change the group subject/name (Admin only)',
   usage: 'setsubject <new name>',
+  examples: ['setsubject Squad Lounge 🚀'],
+  inputs: 'New group name string (max 100 characters)',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const subject = (ctx.rawArgs || ctx.args.join(' ')).trim();
     if (!subject) {
-      await ctx.reply('Usage: .setsubject <new name>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'setsubject',
+          reason: 'New group name is required.',
+          examples: ['setsubject Gaming Hub 🎮'],
+        })
+      );
       return;
     }
 
     try {
       await ctx.socket.groupUpdateSubject(group.id, subject.slice(0, 100));
-      await ctx.reply('Group name updated.');
+      await ctx.reply('✅ Group name updated successfully.');
     } catch {
-      await ctx.reply('Could not update the group name.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Update Group Name',
+          reason: 'Could not change group name. Check bot permissions.',
+        })
+      );
     }
   },
 };
@@ -355,23 +408,37 @@ export const SetDescriptionCommand: Command = {
   name: 'setdesc',
   aliases: ['setdescription', 'gcdesc'],
   category: CommandCategory.GROUP,
-  description: 'Change the group description, admin only',
+  description: 'Change the group description (Admin only)',
   usage: 'setdesc <new description>',
+  examples: ['setdesc Welcome! Rules: Be respectful & no spam.'],
+  inputs: 'New group description text',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const description = (ctx.rawArgs || ctx.args.join(' ')).trim();
     if (!description) {
-      await ctx.reply('Usage: .setdesc <new description>');
+      await ctx.reply(
+        formatUsageError({
+          command: 'setdesc',
+          reason: 'New group description is required.',
+          examples: ['setdesc Welcome to the group!'],
+        })
+      );
       return;
     }
 
     try {
       await ctx.socket.groupUpdateDescription(group.id, description);
-      await ctx.reply('Group description updated.');
+      await ctx.reply('✅ Group description updated successfully.');
     } catch {
-      await ctx.reply('Could not update the group description.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Update Group Description',
+          reason: 'Could not change group description.',
+        })
+      );
     }
   },
 };
@@ -380,22 +447,37 @@ export const DeleteMessageCommand: Command = {
   name: 'del',
   aliases: ['delete', 'deletemsg'],
   category: CommandCategory.GROUP,
-  description: 'Delete a replied message, admin only',
+  description: 'Delete a replied message from the chat (Admin only)',
   usage: 'del <reply to message>',
+  examples: ['del (as a reply to message)'],
+  inputs: 'Reply to the target message',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const key = quotedDeleteKey(ctx, group.id);
     if (!key) {
-      await ctx.reply('Reply to a message with .del to delete it.');
+      await ctx.reply(
+        formatUsageError({
+          command: 'del',
+          reason: 'Must reply to the message you want to delete.',
+          examples: ['del (reply to message)'],
+          hint: 'The bot must be a group admin to delete others\' messages.',
+        })
+      );
       return;
     }
 
     try {
       await ctx.socket.sendMessage(group.id, { delete: key });
     } catch {
-      await ctx.reply('Could not delete that message.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Delete Message',
+          reason: 'Could not delete that message. Ensure the bot has admin rights.',
+        })
+      );
     }
   },
 };
@@ -404,15 +486,25 @@ export const WarnCommand: Command = {
   name: 'warn',
   aliases: ['warning'],
   category: CommandCategory.GROUP,
-  description: 'Warn a member; 3 warnings removes them',
+  description: 'Warn a member for rule violations; 3 warnings automatically kicks them (Admin only)',
   usage: 'warn @user|<number> [reason]',
+  examples: ['warn @user Spamming links', 'warn 628123456789 Inappropriate behavior'],
+  inputs: 'Mention @user or number, and optional reason',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const target = resolveTarget(ctx, group);
     if (!target) {
-      await ctx.reply('Usage: .warn @user [reason]');
+      await ctx.reply(
+        formatUsageError({
+          command: 'warn',
+          reason: 'Target member to warn is required.',
+          examples: ['warn @user Spamming', 'warn @user Toxic language'],
+          hint: 'Mention @user or reply to their message.',
+        })
+      );
       return;
     }
 
@@ -435,7 +527,7 @@ export const WarnCommand: Command = {
       try {
         await ctx.socket.groupParticipantsUpdate(group.id, [target.jid], 'remove');
         await ctx.socket.sendMessage(group.id, {
-          text: `${displayJid(target.jid)} reached ${WARN_LIMIT}/${WARN_LIMIT} warnings and was removed.`,
+          text: `🚨 ${displayJid(target.jid)} reached ${WARN_LIMIT}/${WARN_LIMIT} warnings and was removed from the group.`,
           mentions: [target.jid],
         });
       } catch {
@@ -446,7 +538,7 @@ export const WarnCommand: Command = {
 
     saveWarnings();
     await ctx.socket.sendMessage(group.id, {
-      text: `${displayJid(target.jid)} warned (${entry.count}/${WARN_LIMIT}).${entry.lastReason ? `\nReason: ${entry.lastReason}` : ''}`,
+      text: `⚠️ *Warning Issued:*\n${displayJid(target.jid)} received a warning (*${entry.count}/${WARN_LIMIT}*).${entry.lastReason ? `\n• *Reason:* ${entry.lastReason}` : ''}\n\n_Reaching ${WARN_LIMIT} warnings will result in an automatic ban._`,
       mentions: [target.jid],
     });
   },
@@ -456,21 +548,30 @@ export const UnwarnCommand: Command = {
   name: 'unwarn',
   aliases: ['removewarn'],
   category: CommandCategory.GROUP,
-  description: 'Remove one warning from a member',
+  description: 'Remove one warning from a member (Admin only)',
   usage: 'unwarn @user|<number>',
+  examples: ['unwarn @user'],
+  inputs: 'Mention @user or number',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
 
     const target = resolveTarget(ctx, group);
     if (!target) {
-      await ctx.reply('Usage: .unwarn @user');
+      await ctx.reply(
+        formatUsageError({
+          command: 'unwarn',
+          reason: 'Target member to unwarn is required.',
+          examples: ['unwarn @user'],
+        })
+      );
       return;
     }
 
     const entry = readWarnings()[group.id]?.[target.jid];
     if (!entry) {
-      await ctx.reply('That member has no warnings.');
+      await ctx.reply('That member has no recorded warnings.');
       return;
     }
 
@@ -478,7 +579,7 @@ export const UnwarnCommand: Command = {
     if (entry.count <= 0) delete readWarnings()[group.id][target.jid];
     saveWarnings();
     await ctx.socket.sendMessage(group.id, {
-      text: `${displayJid(target.jid)} now has ${Math.max(0, entry.count)}/${WARN_LIMIT} warnings.`,
+      text: `✅ ${displayJid(target.jid)} now has *${Math.max(0, entry.count)}/${WARN_LIMIT}* warnings.`,
       mentions: [target.jid],
     });
   },
@@ -488,8 +589,10 @@ export const WarningsCommand: Command = {
   name: 'warnings',
   aliases: ['warns'],
   category: CommandCategory.GROUP,
-  description: 'Show group warnings',
+  description: 'Show active group warnings for a user or the entire group',
   usage: 'warnings [@user]',
+  examples: ['warnings', 'warnings @user'],
+  inputs: 'Optional user mention',
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group) return;
@@ -498,18 +601,18 @@ export const WarningsCommand: Command = {
     const groupWarnings = readWarnings()[group.id] || {};
     if (target) {
       const count = groupWarnings[target.jid]?.count || 0;
-      await ctx.socket.sendMessage(group.id, { text: `${displayJid(target.jid)} has ${count}/${WARN_LIMIT} warnings.`, mentions: [target.jid] });
+      await ctx.socket.sendMessage(group.id, { text: `📊 ${displayJid(target.jid)} has *${count}/${WARN_LIMIT}* warnings.`, mentions: [target.jid] });
       return;
     }
 
     const rows = Object.entries(groupWarnings).filter(([, entry]) => entry.count > 0);
     if (!rows.length) {
-      await ctx.reply('No warnings in this group.');
+      await ctx.reply('✅ No active warnings in this group.');
       return;
     }
 
     await ctx.socket.sendMessage(group.id, {
-      text: rows.map(([jid, entry]) => `${displayJid(jid)}: ${entry.count}/${WARN_LIMIT}`).join('\n'),
+      text: `📋 *Group Warnings List:*\n\n` + rows.map(([jid, entry]) => `• ${displayJid(jid)}: *${entry.count}/${WARN_LIMIT}* warnings`).join('\n'),
       mentions: rows.map(([jid]) => jid),
     });
   },
@@ -519,8 +622,11 @@ export const ClearWarningsCommand: Command = {
   name: 'clearwarns',
   aliases: ['resetwarns'],
   category: CommandCategory.GROUP,
-  description: 'Clear warnings for a member or all members',
+  description: 'Clear all warnings for a member or all members in the group (Admin only)',
   usage: 'clearwarns @user|all',
+  examples: ['clearwarns @user', 'clearwarns all'],
+  inputs: 'Mention @user or "all"',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group || !(await requireGroupManager(ctx, group))) return;
@@ -529,19 +635,25 @@ export const ClearWarningsCommand: Command = {
     if (mode === 'all') {
       delete readWarnings()[group.id];
       saveWarnings();
-      await ctx.reply('Cleared all warnings in this group.');
+      await ctx.reply('✅ Cleared all warnings in this group.');
       return;
     }
 
     const target = resolveTarget(ctx, group);
     if (!target) {
-      await ctx.reply('Usage: .clearwarns @user|all');
+      await ctx.reply(
+        formatUsageError({
+          command: 'clearwarns',
+          reason: 'Specify a member or "all".',
+          examples: ['clearwarns @user', 'clearwarns all'],
+        })
+      );
       return;
     }
 
     delete (readWarnings()[group.id] ||= {})[target.jid];
     saveWarnings();
-    await ctx.socket.sendMessage(group.id, { text: `Cleared warnings for ${displayJid(target.jid)}.`, mentions: [target.jid] });
+    await ctx.socket.sendMessage(group.id, { text: `✅ Cleared all warnings for ${displayJid(target.jid)}.`, mentions: [target.jid] });
   },
 };
 
@@ -549,8 +661,11 @@ export const TagAllCommand: Command = {
   name: 'tagall',
   aliases: ['hidetag'],
   category: CommandCategory.GROUP,
-  description: 'Mention all group members, admin only',
+  description: 'Mention all group members with an announcement message (Admin only)',
   usage: 'tagall [message]',
+  examples: ['tagall Meeting starting in 5 minutes!', 'tagall'],
+  inputs: 'Optional announcement text',
+  permissions: PermissionLevel.GROUP_ADMIN,
   async execute(ctx) {
     const group = await requireGroup(ctx);
     if (!group) return;
@@ -563,7 +678,7 @@ export const TagAllCommand: Command = {
     }
 
     const members = group.participants.map((p) => p.id);
-    const text = ctx.args.join(' ').trim() || 'Tag all';
+    const text = ctx.args.join(' ').trim() || '📢 Attention everyone!';
     await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
       text: `${text}\n\n${members.map(displayJid).join(' ')}`,
       mentions: members,

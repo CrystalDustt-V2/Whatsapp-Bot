@@ -5,6 +5,7 @@ import { createPuterAIService, type AIServiceTool } from '../services/ai-service
 import { readAiMemoryContext } from '../services/message-memory';
 import { stickerEngine } from '../services/sticker-engine';
 import { BotContext, Command, CommandCategory } from '../types';
+import { formatUsageError } from '../core/response-formatter';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -1001,8 +1002,17 @@ export const AiCommand: Command = {
   name: 'ai',
   aliases: ['ask'],
   category: CommandCategory.AI,
-  description: 'Ask "CrystalDust V0" AI or let it use bot commands',
+  description: 'Chat with "CrystalDust V0" AI, generate code, analyze context, or execute bot actions',
   usage: 'ai <message>',
+  examples: [
+    'ai write a TypeScript function to debounce an event',
+    'ai summarize the recent discussion in this group',
+    'ai generate image of a futuristic cyberpunk city',
+    'ai generate voice saying Welcome to the group chat!',
+    'ai play bohemian rhapsody',
+  ],
+  inputs: 'Text prompt, question, code request, or multimedia instruction',
+  limits: 'Max 50,000 chars per message, 4,096 max output tokens',
   async execute(ctx) {
     const input = ctx.args.join(' ').trim();
     aiDebug(
@@ -1021,7 +1031,19 @@ export const AiCommand: Command = {
     );
 
     if (!input) {
-      await replyText(ctx, 'Usage: .ai <message>');
+      await replyText(
+        ctx,
+        formatUsageError({
+          command: 'ai',
+          reason: 'Your message or prompt cannot be empty.',
+          examples: [
+            'ai what is quantum computing?',
+            'ai explain async/await in JavaScript with examples',
+            'ai draw a cozy cabin in a snowy forest',
+          ],
+          hint: 'CrystalDust V0 remembers recent conversation history and can run bot commands for you.',
+        })
+      );
       return;
     }
 

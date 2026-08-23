@@ -1,5 +1,6 @@
 import { searchYtDlp } from '../services/tiktok-downloader';
 import { Command, CommandCategory } from '../types';
+import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 type GeniusSong = {
   title: string;
@@ -401,42 +402,179 @@ export const GitHubSearchCommand: Command = {
   },
 };
 
+type WallpaperOptions = {
+  query: string;
+  ratios?: string;
+  atleast?: string;
+  categories: string;
+  orientationLabel?: string;
+  resolutionLabel?: string;
+  categoryLabel?: string;
+};
+
+function parseWallpaperArgs(args: string[]): WallpaperOptions {
+  let ratios: string | undefined;
+  let atleast: string | undefined;
+  let categories = '111'; // General, Anime, People
+  let orientationLabel: string | undefined;
+  let resolutionLabel: string | undefined;
+  let categoryLabel: string | undefined;
+
+  const queryParts: string[] = [];
+
+  for (const arg of args) {
+    const lower = arg.toLowerCase();
+    if (lower === '--portrait' || lower === '--mobile' || lower === '--phone' || lower === '--vertical') {
+      ratios = '9x16,10x16,9x18';
+      orientationLabel = 'Mobile / Portrait';
+    } else if (lower === '--landscape' || lower === '--desktop' || lower === '--pc' || lower === '--horizontal') {
+      ratios = '16x9,16x10,21x9';
+      orientationLabel = 'Desktop / Landscape';
+    } else if (lower === '--square') {
+      ratios = '1x1';
+      orientationLabel = 'Square (1:1)';
+    } else if (lower === '--4k' || lower === '--uhd') {
+      atleast = '3840x2160';
+      resolutionLabel = '4K UHD (3840x2160+)';
+    } else if (lower === '--2k' || lower === '--qhd') {
+      atleast = '2560x1440';
+      resolutionLabel = '2K QHD (2560x1440+)';
+    } else if (lower === '--1080p' || lower === '--fhd') {
+      atleast = '1920x1080';
+      resolutionLabel = '1080p FHD (1920x1080+)';
+    } else if (lower === '--anime') {
+      categories = '010';
+      categoryLabel = 'Anime';
+    } else if (lower === '--general') {
+      categories = '100';
+      categoryLabel = 'General';
+    } else if (lower === '--people') {
+      categories = '001';
+      categoryLabel = 'People';
+    } else {
+      queryParts.push(arg);
+    }
+  }
+
+  return {
+    query: queryParts.join(' ').trim(),
+    ratios,
+    atleast,
+    categories,
+    orientationLabel,
+    resolutionLabel,
+    categoryLabel,
+  };
+}
+
 export const WallpaperCommand: Command = {
   name: 'wallpaper',
   aliases: ['wp', 'wallpapers'],
   category: CommandCategory.SEARCH,
-  description: 'Search and download HD wallpapers',
-  usage: 'wallpaper <query>',
+  description: 'Search and download ultra-HD wallpapers with resolution, orientation, and category filters',
+  usage: 'wallpaper <query> [--portrait|--landscape] [--4k|--2k|--1080p] [--anime|--general]',
+  examples: [
+    'wallpaper cyberpunk --portrait --4k',
+    'wallpaper nature --landscape --4k',
+    'wallpaper lofi room --mobile',
+    'wallpaper neon city --anime --2k',
+  ],
+  inputs: 'Search query and optional filter flags',
+  limits: 'Max 10MB image',
   async execute(ctx) {
-    const query = ctx.args.join(' ').trim();
-    if (!query) {
-      await ctx.reply('Usage: .wallpaper <topic>\nExample: .wallpaper cyberpunk');
+    const parsed = parseWallpaperArgs(ctx.args);
+    if (!parsed.query) {
+      await ctx.reply(
+        formatUsageError({
+          command: 'wallpaper',
+          reason: 'Wallpaper topic or search query is required.',
+          examples: [
+            'wallpaper cyberpunk --portrait --4k',
+            'wallpaper anime aesthetic --mobile',
+            'wallpaper mountain sunset --landscape',
+          ],
+          hint: 'Flags: --portrait / --landscape, --4k / --2k / --1080p, --anime / --general.',
+        })
+      );
       return;
     }
 
     try {
-      await ctx.reply(`Searching wallpaper for "${query}"...`);
-      const data = getObject(await fetchJson(`https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(query)}&sorting=relevance`));
-      const items = getArray(data?.data);
-      const first = getObject(items[0]);
-      const imageUrl = getString(first?.path);
-      const resolution = getString(first?.resolution);
+      await ctx.reply(`🖼️ Searching HD wallpaper for "${parsed.query}"...`);
 
-      if (imageUrl) {
-        const buffer = await fetchImageBuffer(imageUrl);
-        if (buffer) {
-          await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
-            image: buffer,
-            caption: `*Wallpaper: ${query}*${resolution ? `\nResolution: ${resolution}` : ''}\nSource: Wallhaven`,
-          });
-          return;
+      // 1. Primary Source: Wallhaven API
+      const params = new URLSearchParams({
+        q: parsed.query,
+        categories: parsed.categories,
+        purity: '100', // SFW
+        sorting: 'relevance',
+      });
+      if (parsed.ratios) params.set('ratios', parsed.ratios);
+      if (parsed.atleast) params.set('atleast', parsed.atleast);
+
+      const data = getObject(await fetchJson(`https://wallhaven.cc/api/v1/search?${params.toString()}`));
+      const items = getArray(data?.data);
+
+      if (items.length > 0) {
+        const first = getObject(items[0]);
+        const imageUrl = getString(first?.path);
+        const resolution = getString(first?.resolution);
+        const category = getString(first?.category);
+        const webUrl = getString(first?.url);
+
+        if (imageUrl) {
+          const buffer = await fetchImageBuffer(imageUrl);
+          if (buffer) {
+            const lines = [
+              `🖼️ *HD Wallpaper: ${parsed.query}*`,
+              resolution ? `📐 *Resolution:* ${resolution}${parsed.resolutionLabel ? ` (${parsed.resolutionLabel})` : ''}` : undefined,
+              parsed.orientationLabel ? `📱 *Orientation:* ${parsed.orientationLabel}` : undefined,
+              category ? `🏷️ *Category:* ${category}` : undefined,
+              `🌐 *Source:* Wallhaven`,
+              webUrl ? `🔗 *Direct Link:* ${webUrl}` : undefined,
+            ].filter(Boolean);
+
+            await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+              image: buffer,
+              caption: lines.join('\n'),
+            });
+            return;
+          }
+        }
+      }
+
+      // 2. Secondary Fallback: Unsplash Source API
+      const isPortrait = parsed.ratios?.includes('9x16');
+      const width = parsed.atleast ? Number(parsed.atleast.split('x')[0]) : (isPortrait ? 1080 : 1920);
+      const height = parsed.atleast ? Number(parsed.atleast.split('x')[1]) : (isPortrait ? 1920 : 1080);
+      const unsplashData = getObject(await fetchJson(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(parsed.query)}&per_page=1&client_id=YOUR_CLIENT_ID`).catch(() => null));
+      const unsplashItems = getArray(unsplashData?.results);
+      if (unsplashItems.length > 0) {
+        const firstUnsplash = getObject(unsplashItems[0]);
+        const urls = getObject(firstUnsplash?.urls);
+        const rawImg = getString(urls?.regular) || getString(urls?.full);
+        if (rawImg) {
+          const buffer = await fetchImageBuffer(rawImg);
+          if (buffer) {
+            await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+              image: buffer,
+              caption: `🖼️ *Wallpaper: ${parsed.query}*\n📐 *Resolution:* ${firstUnsplash?.width}x${firstUnsplash?.height}\n🌐 *Source:* Unsplash`,
+            });
+            return;
+          }
         }
       }
     } catch {
       // Fallback
     }
 
-    await ctx.reply(`Wallpaper search: https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${query} wallpaper`)}`);
+    await ctx.reply(
+      formatFailed({
+        title: 'Wallpaper Search',
+        reason: `No wallpaper matched "${parsed.query}" with the selected filters.`,
+        tryHint: `Try broader keywords or browse on https://wallhaven.cc/search?q=${encodeURIComponent(parsed.query)}`,
+      })
+    );
   },
 };
 

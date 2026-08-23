@@ -308,16 +308,37 @@ async function createSbratSticker(text: string, theme: BratTheme): Promise<Buffe
   return sharpInstance.webp({ quality: 92 }).toBuffer();
 }
 
+import { formatUsageError, formatFailed } from '../../core/response-formatter';
+
 export const SbratStickerCommand: Command = {
   name: 'sbrat',
   aliases: ['brat', 'bratsticker'],
   category: CommandCategory.STICKER,
   description: 'Create an authentic brat album cover text sticker with native emojis and blur',
   usage: 'sbrat [green|white|black|blue] <text>',
+  examples: [
+    'sbrat 365 party girl 🔥 💅',
+    'sbrat white deluxe version ✨',
+    'sbrat black sympathy is a knife',
+    'sbrat blue rewind 🔁',
+  ],
+  inputs: 'Theme name (optional: green, white, black, blue) and sticker text/emojis',
+  limits: 'Max 500 characters',
   async execute(ctx) {
     const { theme, text } = parseArgs(ctx.rawArgs || ctx.args.join(' '));
     if (!text) {
-      await ctx.reply('Usage: .sbrat [green|white|black|blue] <text>\nExample: .sbrat 365 party girl 🔥 💅\nExample: .sbrat white deluxe edition');
+      await ctx.reply(
+        formatUsageError({
+          command: 'sbrat',
+          reason: 'Text content for the brat sticker is required.',
+          examples: [
+            'sbrat 365 party girl 🔥 💅',
+            'sbrat white deluxe edition',
+            'sbrat black club classics',
+          ],
+          hint: 'Themes supported: green (default), white, black, blue.',
+        })
+      );
       return;
     }
 
@@ -328,7 +349,13 @@ export const SbratStickerCommand: Command = {
         mimetype: 'image/webp',
       });
     } catch {
-      await ctx.reply('Failed to create brat sticker.');
+      await ctx.reply(
+        formatFailed({
+          title: 'Brat Sticker Generation',
+          reason: 'Could not render brat sticker graphic.',
+          tryHint: 'Try shortening the text or removing rare unsupported characters.',
+        })
+      );
     }
   },
 };

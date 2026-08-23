@@ -54,6 +54,9 @@ export interface CommandMetadata {
   cooldown?: number;
   usage?: string;
   description?: string;
+  examples?: string[];
+  inputs?: string;
+  limits?: string;
 }
 
 export interface Command extends CommandMetadata {

@@ -1,5 +1,6 @@
 import { Command, CommandCategory } from '../types';
 import { downloadYtDlpVideoFile, searchYtDlp } from '../services/tiktok-downloader';
+import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 type SocialVideoProvider = {
   name: string;
@@ -96,10 +97,26 @@ function createSocialVideoCommand(provider: SocialVideoProvider): Command {
     category: CommandCategory.DOWNLOADER,
     description: provider.description,
     usage: provider.usage,
+    examples: [
+      `${provider.name} https://${provider.hosts[0]}/...`,
+      `${provider.name} viral reel`,
+    ],
+    inputs: `${provider.name} URL or search query`,
+    limits: 'Max 50MB video file',
     async execute(ctx) {
       const input = ctx.args.join(' ').trim();
       if (!input) {
-        await ctx.reply(`Usage: .${provider.usage}`);
+        await ctx.reply(
+          formatUsageError({
+            command: provider.name,
+            reason: `${provider.name} URL or search query is required.`,
+            examples: [
+              `${provider.name} https://${provider.hosts[0]}/...`,
+              `${provider.name} trending short clip`,
+            ],
+            hint: `Downloads media directly from ${provider.hosts.join(', ')}.`,
+          })
+        );
         return;
       }
 
@@ -110,7 +127,7 @@ function createSocialVideoCommand(provider: SocialVideoProvider): Command {
 
       if (!targetUrl) {
         try {
-          await ctx.reply(`Searching and finding ${provider.name} media...`);
+          await ctx.reply(`🔍 Searching and finding ${provider.name} media...`);
           const searchInput = provider.searchPrefix
             ? `ytsearch1:${provider.searchPrefix} ${input}`
             : `ytsearch1:${provider.name} ${input}`;
@@ -122,18 +139,31 @@ function createSocialVideoCommand(provider: SocialVideoProvider): Command {
       }
 
       if (!targetUrl) {
-        await ctx.reply(`Could not find a downloadable media for "${input}". Please provide a direct ${provider.name} link.`);
+        await ctx.reply(
+          formatFailed({
+            title: `${provider.name} Media Search`,
+            reason: `Could not find downloadable media for "${input}".`,
+            tryHint: `Please provide a direct ${provider.name} link.`,
+          })
+        );
         return;
       }
 
       try {
-        await ctx.reply(`Downloading ${provider.name} media...`);
+        await ctx.reply(`🎬 Downloading ${provider.name} media, please wait...`);
         const video = await downloadYtDlpVideoFile(targetUrl);
+        const formatBytes = (bytes: number) => {
+          if (bytes < 1024) return `${bytes} B`;
+          if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+          return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        };
+
         const lines = [
-          `*${provider.name.charAt(0).toUpperCase() + provider.name.slice(1)} Video*`,
+          `🎬 *${provider.name.charAt(0).toUpperCase() + provider.name.slice(1)} Media*`,
           video.info?.title ? `Title: ${video.info.title}` : undefined,
           video.info?.uploader ? `Creator: ${video.info.uploader}` : undefined,
           video.info?.duration ? `Duration: ${video.info.duration}` : undefined,
+          `Size: ${formatBytes(video.buffer.byteLength)}${video.fromCache ? ' ⚡ (Instant Cache)' : ''}`,
         ].filter(Boolean);
 
         await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
@@ -171,7 +201,13 @@ function createSocialVideoCommand(provider: SocialVideoProvider): Command {
           }
         }
 
-        await ctx.reply(`Could not download video from that ${provider.name} link. Ensure the video is public and accessible.`);
+        await ctx.reply(
+          formatFailed({
+            title: `${provider.name} Download`,
+            reason: 'Could not download media from that link. Content may be private, removed, or geo-locked.',
+            tryHint: 'Check if the post is public in a regular browser.',
+          })
+        );
       }
     },
   };
@@ -183,10 +219,20 @@ export const InstagramProfileCommand: Command = {
   category: CommandCategory.SEARCH,
   description: 'Fetch an Instagram user profile and avatar picture',
   usage: 'igprofile <username>',
+  examples: ['igprofile cristiano', 'igprofile leomessi', 'igprofile https://instagram.com/zuck'],
+  inputs: 'Instagram username or profile URL',
   async execute(ctx) {
-    const username = handle(ctx.args.join(' ').trim());
+    const rawInput = ctx.args.join(' ').trim();
+    const username = handle(rawInput);
     if (!username) {
-      await ctx.reply('Usage: .igprofile <username>\nExample: .igprofile cristiano');
+      await ctx.reply(
+        formatUsageError({
+          command: 'igprofile',
+          reason: 'Valid Instagram username or profile URL is required.',
+          examples: ['igprofile cristiano', 'igprofile https://instagram.com/leomessi'],
+          hint: 'Only public Instagram profiles can be fetched.',
+        })
+      );
       return;
     }
 
@@ -300,10 +346,19 @@ export const TikTokProfileCommand: Command = {
   category: CommandCategory.SEARCH,
   description: 'Fetch TikTok creator profile details and avatar picture',
   usage: 'tiktokprofile <username>',
+  examples: ['tiktokprofile khaby.lame', 'tiktokprofile tiktok', 'tiktokprofile https://www.tiktok.com/@charlidamelio'],
+  inputs: 'TikTok handle or profile URL',
   async execute(ctx) {
     const username = handle(ctx.args.join(' ').trim(), 24);
     if (!username) {
-      await ctx.reply('Usage: .tiktokprofile <username>\nExample: .tiktokprofile tiktok');
+      await ctx.reply(
+        formatUsageError({
+          command: 'tiktokprofile',
+          reason: 'Valid TikTok username or profile URL is required.',
+          examples: ['tiktokprofile khaby.lame', 'tiktokprofile @tiktok'],
+          hint: 'Only public TikTok profiles can be fetched.',
+        })
+      );
       return;
     }
 
@@ -400,10 +455,19 @@ export const TwitterProfileCommand: Command = {
   category: CommandCategory.SEARCH,
   description: 'Fetch an X/Twitter profile details and high-res avatar picture',
   usage: 'xprofile <username>',
+  examples: ['xprofile elonmusk', 'xprofile OpenAI', 'xprofile https://x.com/sama'],
+  inputs: 'X/Twitter username or profile URL',
   async execute(ctx) {
     const username = handle(ctx.args.join(' ').trim(), 15);
     if (!username) {
-      await ctx.reply('Usage: .xprofile <username>\nExample: .xprofile elonmusk');
+      await ctx.reply(
+        formatUsageError({
+          command: 'xprofile',
+          reason: 'Valid X/Twitter handle is required.',
+          examples: ['xprofile elonmusk', 'xprofile sama'],
+          hint: 'Fetches followers, bio, verified status, and avatar.',
+        })
+      );
       return;
     }
 
@@ -479,12 +543,21 @@ export const GitHubProfileCommand: Command = {
   name: 'ghprofile',
   aliases: ['githubprofile', 'ghuser', 'ghstalk'],
   category: CommandCategory.SEARCH,
-  description: 'Fetch a GitHub user profile and avatar picture',
+  description: 'Fetch a GitHub user profile, repo counts, and avatar picture',
   usage: 'ghprofile <username>',
+  examples: ['ghprofile torvalds', 'ghprofile octocat', 'ghprofile https://github.com/facebook'],
+  inputs: 'GitHub username or profile URL',
   async execute(ctx) {
     const username = handle(ctx.args.join(' ').trim(), 39);
     if (!username) {
-      await ctx.reply('Usage: .ghprofile <username>\nExample: .ghprofile torvalds');
+      await ctx.reply(
+        formatUsageError({
+          command: 'ghprofile',
+          reason: 'Valid GitHub username is required.',
+          examples: ['ghprofile torvalds', 'ghprofile octocat'],
+          hint: 'Fetches public repos, followers, bio, and website.',
+        })
+      );
       return;
     }
 
@@ -497,7 +570,13 @@ export const GitHubProfileCommand: Command = {
       });
 
       if (!response.ok) {
-        await ctx.reply(`GitHub user "${username}" was not found.`);
+        await ctx.reply(
+          formatFailed({
+            title: 'GitHub Profile',
+            reason: `GitHub user "${username}" was not found or is suspended.`,
+            tryHint: 'Check if the username is spelled correctly.',
+          })
+        );
         return;
       }
 
@@ -546,7 +625,13 @@ export const GitHubProfileCommand: Command = {
 
       await ctx.reply(lines.join('\n'));
     } catch {
-      await ctx.reply(`Could not fetch GitHub profile for "${username}".`);
+      await ctx.reply(
+        formatFailed({
+          title: 'GitHub Profile Lookup',
+          reason: `Could not fetch GitHub profile for "${username}".`,
+          tryHint: 'Check your internet connection and try again.',
+        })
+      );
     }
   },
 };
@@ -555,12 +640,21 @@ export const RedditProfileCommand: Command = {
   name: 'redditprofile',
   aliases: ['reddituser', 'uprofile', 'redditstalk'],
   category: CommandCategory.SEARCH,
-  description: 'Fetch a Reddit user profile details and avatar',
+  description: 'Fetch a Reddit user profile details, karma, and avatar',
   usage: 'redditprofile <username>',
+  examples: ['redditprofile spez', 'redditprofile auto-moderator'],
+  inputs: 'Reddit username',
   async execute(ctx) {
     const username = handle(ctx.args.join(' ').trim(), 30);
     if (!username) {
-      await ctx.reply('Usage: .redditprofile <username>\nExample: .redditprofile spez');
+      await ctx.reply(
+        formatUsageError({
+          command: 'redditprofile',
+          reason: 'Valid Reddit username is required.',
+          examples: ['redditprofile spez'],
+          hint: 'Fetches post karma, comment karma, and cake day.',
+        })
+      );
       return;
     }
 
@@ -629,12 +723,21 @@ export const YouTubeProfileCommand: Command = {
   name: 'ytprofile',
   aliases: ['youtubeprofile', 'ytchannel'],
   category: CommandCategory.SEARCH,
-  description: 'Fetch YouTube channel profile and avatar',
+  description: 'Fetch YouTube channel profile, name, and avatar',
   usage: 'ytprofile <channel/handle>',
+  examples: ['ytprofile mkbhd', 'ytprofile MrBeast', 'ytprofile https://youtube.com/@veritasium'],
+  inputs: 'YouTube handle or channel URL',
   async execute(ctx) {
     const raw = ctx.args.join(' ').trim();
     if (!raw) {
-      await ctx.reply('Usage: .ytprofile <channel name or @handle>\nExample: .ytprofile mkbhd');
+      await ctx.reply(
+        formatUsageError({
+          command: 'ytprofile',
+          reason: 'YouTube channel name or @handle is required.',
+          examples: ['ytprofile mkbhd', 'ytprofile @veritasium'],
+          hint: 'Fetches channel title, link, and high-res avatar.',
+        })
+      );
       return;
     }
 
@@ -688,22 +791,33 @@ export const UniversalProfileCommand: Command = {
   name: 'profile',
   aliases: ['stalk', 'fetchprofile', 'userprofile'],
   category: CommandCategory.SEARCH,
-  description: 'Fetch user profile on any supported social media platform (Instagram, TikTok, Twitter/X, GitHub, Reddit, YouTube)',
+  description: 'Universal stalker: fetch user profile across Instagram, TikTok, Twitter/X, GitHub, Reddit, and YouTube',
   usage: 'profile <platform> <username> OR profile <profile-url>',
+  examples: [
+    'profile x elonmusk',
+    'profile ig cristiano',
+    'profile gh torvalds',
+    'profile tt khaby.lame',
+    'profile reddit spez',
+    'profile yt mkbhd',
+    'profile https://instagram.com/leomessi',
+  ],
+  inputs: 'Platform code + username, or full social media profile URL',
   async execute(ctx) {
     const raw = ctx.args.join(' ').trim();
     if (!raw) {
       await ctx.reply(
-        'Usage: .profile <platform> <username> OR .profile <url>\n\n' +
-        'Supported platforms:\n' +
-        '- *.profile ig <username>* (Instagram)\n' +
-        '- *.profile x <username>* (Twitter / X)\n' +
-        '- *.profile tt <username>* (TikTok)\n' +
-        '- *.profile gh <username>* (GitHub)\n' +
-        '- *.profile reddit <username>* (Reddit)\n' +
-        '- *.profile yt <channel>* (YouTube)\n\n' +
-        'Example: .profile x elonmusk\n' +
-        'Example: .profile https://instagram.com/cristiano'
+        formatUsageError({
+          command: 'profile',
+          reason: 'Platform and username or profile URL is required.',
+          examples: [
+            'profile x elonmusk',
+            'profile ig cristiano',
+            'profile gh torvalds',
+            'profile https://instagram.com/leomessi',
+          ],
+          hint: 'Supported platforms: ig (Instagram), x (Twitter), tt (TikTok), gh (GitHub), reddit (Reddit), yt (YouTube).',
+        })
       );
       return;
     }

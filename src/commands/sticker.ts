@@ -1,3 +1,4 @@
+import config from '../config';
 import { BotContext, Command, CommandCategory } from '../types';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import type { proto } from '@whiskeysockets/baileys';
@@ -93,12 +94,25 @@ async function runSubcommand(ctx: BotContext): Promise<boolean> {
   return true;
 }
 
+import { formatUsageError, formatFailed } from '../core/response-formatter';
+
 export const StickerCommand: Command = {
   name: 'sticker',
   aliases: ['s', 'stiker'],
   category: CommandCategory.STICKER,
-  description: 'Create stickers and run sticker effects',
-  usage: 'sticker [--nocrop] [metadata]|<bw|sepia|vintage|cartoon|glitch|border|text|meme|url|revert|brat> ...',
+  description: 'Convert images/videos into high-quality WhatsApp stickers with effects',
+  usage: 'sticker [--nocrop] [packName|shape|effect]',
+  examples: [
+    'sticker',
+    'sticker --nocrop My Pack Name',
+    'sticker circle',
+    'sticker rounded',
+    's sepia',
+    's glitch',
+    's brat charli xcx',
+  ],
+  inputs: 'Image, GIF, or short video (<10s) attached or quoted',
+  limits: 'Max 10MB media, max 10s video',
   async execute(ctx) {
     if (await runSubcommand(ctx)) return;
 
@@ -121,10 +135,17 @@ export const StickerCommand: Command = {
     }
 
     if (!media) {
-      await ctx.socket.sendMessage(
-        ctx.message.key.remoteJid!,
-        { text: 'Please send or reply to an image or video!' },
-        { quoted: ctx.message }
+      await ctx.reply(
+        formatUsageError({
+          command: 'sticker',
+          reason: 'No image or video detected in this message or reply.',
+          examples: [
+            'sticker (send with image)',
+            'sticker --nocrop (reply to image)',
+            'sticker circle (reply to image)',
+          ],
+          hint: 'Send an image with caption .sticker or reply to an existing image/video.',
+        })
       );
       return;
     }
@@ -140,7 +161,7 @@ export const StickerCommand: Command = {
       let processedBuffer: Buffer;
       const { noCrop } = parseLeadingOptions(ctx.rawArgs);
       const { shape, metadata } = parseStickerArgs(ctx.rawArgs);
-      const options = { packName: metadata, author: STICKER_WATERMARK };
+      const options = { packName: metadata || config.OWNER_NAME, author: STICKER_WATERMARK };
 
       if ('mimetype' in media && media.mimetype?.startsWith('image/')) {
         if (shape) {
@@ -163,10 +184,12 @@ export const StickerCommand: Command = {
       );
     } catch (err) {
       console.error(err);
-      await ctx.socket.sendMessage(
-        ctx.message.key.remoteJid!,
-        { text: 'Failed to create sticker!' },
-        { quoted: ctx.message }
+      await ctx.reply(
+        formatFailed({
+          title: 'Sticker Creation',
+          reason: 'Could not process media into a sticker. File format might not be supported or file is too large.',
+          tryHint: 'Try sending a standard JPEG/PNG image or short MP4 video.',
+        })
       );
     }
   },
