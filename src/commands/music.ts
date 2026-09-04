@@ -561,6 +561,7 @@ function playFailure(err: unknown): string {
   if (message.includes('yt-dlp binary cannot run')) return 'yt-dlp binary cannot run on this server. Upload the Linux binary.';
   if (message.includes('cookies file was not found')) return 'Configured yt-dlp cookies file was not found.';
   if (message.includes('cookies file is invalid')) return 'yt-dlp cookies file is invalid. Export it in Netscape cookies.txt format.';
+  if (message.includes('The page needs to be reloaded')) return 'YouTube anti-bot challenge: please update yt-dlp on the server with "yt-dlp -U" or check your cookies.txt.';
   if (message.includes('YouTube requires cookies')) return 'YouTube blocked this server. Upload cookies.txt and configure yt-dlp cookies.';
   if (message.includes('JS runtime/EJS')) return 'YouTube needs a JS runtime/EJS solver. Configure YT_DLP_JS_RUNTIME and YT_DLP_REMOTE_COMPONENTS.';
   if (message.includes('DRM')) return 'That source uses DRM and cannot be downloaded.';

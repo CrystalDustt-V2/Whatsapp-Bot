@@ -90,15 +90,21 @@ async function readDownloadedFile(dir: string, prefix: string, maxBytes: number,
 }
 
 import mediaCache from './media-cache';
+import { downloadCobaltVideo, downloadCobaltAudio, isCobaltFallbackEnabled } from './cobalt-service';
 
-async function runYtDlp(args: string[]): Promise<string> {
-  const cookiesPath = process.env.YT_DLP_COOKIES_PATH?.trim();
+async function executeYtDlpOnce(args: string[], options: { useCookies?: boolean; playerClient?: string } = {}): Promise<string> {
+  const cookiesPath = options.useCookies !== false ? process.env.YT_DLP_COOKIES_PATH?.trim() : undefined;
   const jsRuntime = process.env.YT_DLP_JS_RUNTIME?.trim();
   const remoteComponents = process.env.YT_DLP_REMOTE_COMPONENTS?.trim();
+  const customExtractorArgs = process.env.YT_DLP_EXTRACTOR_ARGS?.trim();
+
+  const extractorArg = customExtractorArgs || (options.playerClient ? `youtube:player-client=${options.playerClient}` : 'youtube:player-client=android,web,mweb,ios');
+
   const finalArgs = [
     ...(cookiesPath ? ['--cookies', cookiesPath] : []),
     ...(jsRuntime ? ['--js-runtimes', jsRuntime] : []),
     ...(remoteComponents ? ['--remote-components', remoteComponents] : []),
+    '--extractor-args', extractorArg,
     ...args,
   ];
 
@@ -106,20 +112,48 @@ async function runYtDlp(args: string[]): Promise<string> {
     throw new Error('yt-dlp cookies file was not found on this server');
   }
 
+  const { stdout } = await execFileAsync(await ytDlpBinary(), finalArgs, { maxBuffer: YTDLP_MAX_BUFFER });
+  return stdout;
+}
+
+async function runYtDlp(args: string[]): Promise<string> {
+  // Strategy 1: Default execution with configured cookies and mobile/web player client emulation
   try {
-    const { stdout } = await execFileAsync(await ytDlpBinary(), finalArgs, { maxBuffer: YTDLP_MAX_BUFFER });
-    return stdout;
-  } catch (err) {
+    return await executeYtDlpOnce(args);
+  } catch (err: any) {
+    const stderr = tail(err?.stderr || '');
+    const stdout = tail(err?.stdout || '');
+    const fullErr = `${stderr}\n${stdout}`;
+
+    // Strategy 2: If YouTube returned "The page needs to be reloaded" or JS signature failure, retry with web_embedded/web_safari
+    if (/The page needs to be reloaded|signature solving failed|challenge solving failed/i.test(fullErr)) {
+      logger.info('yt-dlp encountered YouTube player reload challenge, retrying with alternative player clients...');
+      try {
+        return await executeYtDlpOnce(args, { playerClient: 'web_embedded,web_safari,mweb' });
+      } catch {
+        // Strategy 3: Try without cookies in case authenticated session was flagged
+        if (process.env.YT_DLP_COOKIES_PATH?.trim()) {
+          logger.info('Retrying yt-dlp without cookies...');
+          try {
+            return await executeYtDlpOnce(args, { useCookies: false, playerClient: 'android,web,mweb' });
+          } catch {
+            // fall through to error classification
+          }
+        }
+      }
+    }
+
     const code = typeof err === 'object' && err && 'code' in err ? String(err.code) : '';
-    const stderr = tail(typeof err === 'object' && err && 'stderr' in err ? err.stderr : '');
-    const stdout = tail(typeof err === 'object' && err && 'stdout' in err ? err.stdout : '');
     if (code === 'ENOENT') throw new Error('yt-dlp is not installed on this server');
     if (code === 'EACCES') throw new Error('yt-dlp is not executable on this server');
-    if (code === 'ENOEXEC' || /syntax error|exec format|cannot execute binary/i.test(`${stderr}\n${stdout}`)) {
+    if (code === 'ENOEXEC' || /syntax error|exec format|cannot execute binary/i.test(fullErr)) {
       throw new Error('yt-dlp binary cannot run on this server');
     }
     if (/does not look like a netscape|cookies file/i.test(stderr)) throw new Error('yt-dlp cookies file is invalid');
     if (/sign in to confirm|cookies/i.test(stderr)) throw new Error('YouTube requires cookies on this server');
+    if (/The page needs to be reloaded/i.test(stderr)) {
+      throw new Error('YouTube returned "The page needs to be reloaded". Please update yt-dlp on the server with "yt-dlp -U".');
+    }
     if (/signature solving failed|challenge solving failed|requested format is not available/i.test(stderr)) {
       throw new Error('YouTube needs a JS runtime/EJS solver on this server');
     }
@@ -127,6 +161,7 @@ async function runYtDlp(args: string[]): Promise<string> {
     if (/does not pass filter.*duration|duration\s*<=/i.test(stderr)) {
       throw new Error('Media duration exceeds the allowable limit (Max 15m video / 30m audio).');
     }
+
     logger.warn(
       {
         code,
@@ -253,6 +288,20 @@ export async function downloadYtDlpVideoFile(url: string): Promise<DownloadedVid
     const result: DownloadedVideo = { buffer: file.buffer, mimetype: 'video/mp4', info: parseYtDlpInfo(stdout) };
     mediaCache.setVideo(url, result);
     return result;
+  } catch (err: any) {
+    if (isCobaltFallbackEnabled()) {
+      logger.info({ url, error: err?.message }, 'yt-dlp video download failed, attempting Cobalt fallback...');
+      try {
+        const cobaltResult = await downloadCobaltVideo(url);
+        if (cobaltResult) {
+          mediaCache.setVideo(url, cobaltResult);
+          return cobaltResult;
+        }
+      } catch (cobaltErr: any) {
+        logger.warn({ url, error: cobaltErr?.message }, 'Cobalt video fallback failed');
+      }
+    }
+    throw err;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -299,6 +348,20 @@ export async function downloadYtDlpAudioFile(url: string): Promise<DownloadedAud
     const result: DownloadedAudio = { buffer: file.buffer, mimetype: audioMimeType(file.name), info: parseYtDlpInfo(stdout) };
     mediaCache.setAudio(url, result);
     return result;
+  } catch (err: any) {
+    if (isCobaltFallbackEnabled()) {
+      logger.info({ url, error: err?.message }, 'yt-dlp audio download failed, attempting Cobalt fallback...');
+      try {
+        const cobaltResult = await downloadCobaltAudio(url);
+        if (cobaltResult) {
+          mediaCache.setAudio(url, cobaltResult);
+          return cobaltResult;
+        }
+      } catch (cobaltErr: any) {
+        logger.warn({ url, error: cobaltErr?.message }, 'Cobalt audio fallback failed');
+      }
+    }
+    throw err;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -312,3 +375,4 @@ export const downloadTikTokVideo = downloadYtDlpVideo;
 export const downloadTikTokVideoFile = downloadYtDlpVideoFile;
 export const downloadTikTokAudio = downloadYtDlpAudio;
 export const downloadTikTokAudioFile = downloadYtDlpAudioFile;
+export { downloadCobaltVideo, downloadCobaltAudio, isCobaltFallbackEnabled };

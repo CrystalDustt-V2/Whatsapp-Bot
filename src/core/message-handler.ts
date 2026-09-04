@@ -10,6 +10,8 @@ import {
   recordDeletedMessageFromProtocol,
   recordDeletedMessageFromUpdate,
   recordRecoverableMessage,
+  readDeletedMessageMedia,
+  type DeletedMessageRecord,
 } from '../services/deleted-message-recovery';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -127,6 +129,53 @@ export class MessageHandler {
     );
   }
 
+  private async forwardViewOnceToOwner(record: DeletedMessageRecord): Promise<void> {
+    try {
+      const ownerNumber = config.OWNER_NUMBER?.replace(/\D/g, '');
+      const botNumber = this.socket.user?.id?.split(':')[0]?.replace(/\D/g, '');
+      const targetJid = ownerNumber ? `${ownerNumber}@s.whatsapp.net` : (botNumber ? `${botNumber}@s.whatsapp.net` : null);
+      if (!targetJid) return;
+
+      // Avoid forwarding if the owner sent the view-once message themselves to prevent loop
+      if (record.senderNumber && ownerNumber && record.senderNumber.replace(/\D/g, '') === ownerNumber) {
+        return;
+      }
+
+      const buffer = await readDeletedMessageMedia(record);
+      if (!buffer || !record.media) return;
+
+      const caption =
+        `👁️ *[VIEW-ONCE AUTO-SAVED]*\n` +
+        `From: *${record.senderName}* (${record.senderNumber || record.senderJid})\n` +
+        `Chat: \`${record.chatJid}\`\n` +
+        `Time: ${new Date(record.timestamp).toLocaleString()}\n\n` +
+        (record.text ? `Caption: ${record.text}` : '');
+
+      if (record.media.kind === 'video') {
+        await this.socket.sendMessage(targetJid, {
+          video: buffer,
+          mimetype: record.media.mimetype || 'video/mp4',
+          caption: caption.trim(),
+        });
+      } else if (record.media.kind === 'image') {
+        await this.socket.sendMessage(targetJid, {
+          image: buffer,
+          mimetype: record.media.mimetype || 'image/jpeg',
+          caption: caption.trim(),
+        });
+      } else if (record.media.kind === 'audio') {
+        await this.socket.sendMessage(targetJid, { text: caption.trim() });
+        await this.socket.sendMessage(targetJid, {
+          audio: buffer,
+          mimetype: record.media.mimetype || 'audio/ogg',
+          ptt: record.media.ptt ?? false,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, messageId: record.messageId }, 'Could not auto-forward view-once media to owner');
+    }
+  }
+
   async handleMessage(message: WAMessage): Promise<void> {
     try {
       if (!message.key.remoteJid) {
@@ -191,7 +240,10 @@ export class MessageHandler {
         return;
       }
 
-      await recordRecoverableMessage(message, sender, text, timestamp);
+      const savedViewOnce = await recordRecoverableMessage(message, sender, text, timestamp);
+      if (savedViewOnce && config.VIEW_ONCE_AUTO_FORWARD) {
+        await this.forwardViewOnceToOwner(savedViewOnce);
+      }
 
       if (!text.startsWith(config.BOT_PREFIX)) {
         logger.debug(

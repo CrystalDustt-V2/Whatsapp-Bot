@@ -1,5 +1,5 @@
 import { Command, CommandCategory } from '../types';
-import { downloadYtDlpVideoFile, searchYtDlp } from '../services/tiktok-downloader';
+import { downloadYtDlpVideoFile, searchYtDlp, downloadCobaltVideo, downloadCobaltAudio } from '../services/tiktok-downloader';
 import { formatUsageError, formatFailed } from '../core/response-formatter';
 
 type SocialVideoProvider = {
@@ -909,8 +909,117 @@ export const UniversalProfileCommand: Command = {
   },
 };
 
+export const CobaltCommand: Command = {
+  name: 'cobalt',
+  aliases: ['cbl', 'cobalttools', 'cobaltdl'],
+  category: CommandCategory.DOWNLOADER,
+  description: 'Download media directly using the Cobalt.tools engine',
+  usage: 'cobalt <url> [audio|mp3|video]',
+  examples: [
+    'cobalt https://www.youtube.com/watch?v=...',
+    'cobalt https://www.youtube.com/watch?v=... audio',
+    'cobalt https://www.instagram.com/reel/...',
+    'cobalt https://vt.tiktok.com/...',
+  ],
+  inputs: 'Supported media URL (YouTube, TikTok, Instagram, Twitter/X, etc.)',
+  limits: 'Max 50MB video / 20MB audio',
+  async execute(ctx) {
+    const raw = ctx.args.join(' ').trim();
+    if (!raw) {
+      await ctx.reply(
+        formatUsageError({
+          command: 'cobalt',
+          reason: 'A media URL is required.',
+          examples: [
+            'cobalt https://www.youtube.com/watch?v=...',
+            'cobalt https://vt.tiktok.com/... audio',
+          ],
+          hint: 'Cobalt bypasses platform IP bans and anti-bot challenges.',
+        })
+      );
+      return;
+    }
+
+    const lastArg = ctx.args.at(-1)?.toLowerCase();
+    const isAudio = lastArg === 'audio' || lastArg === 'mp3' || lastArg === 'sound';
+    const targetUrl = isAudio ? ctx.args.slice(0, -1).join(' ').trim() : raw;
+
+    if (!/^https?:\/\//i.test(targetUrl)) {
+      await ctx.reply(
+        formatFailed({
+          title: 'Cobalt Downloader',
+          reason: 'Please provide a valid HTTP/HTTPS URL.',
+          tryHint: 'Example: .cobalt https://www.youtube.com/watch?v=...',
+        })
+      );
+      return;
+    }
+
+    await ctx.reply(`⚡ Fetching media via Cobalt (${isAudio ? 'Audio' : 'Video'})...`);
+
+    try {
+      if (isAudio) {
+        const audio = await downloadCobaltAudio(targetUrl);
+        if (!audio) {
+          throw new Error('Cobalt could not extract audio from this URL.');
+        }
+
+        await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+          audio: audio.buffer,
+          mimetype: audio.mimetype,
+          ptt: false,
+        });
+
+        if (audio.info?.title) {
+          const formatBytes = (bytes: number) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+          };
+
+          await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+            text: `*Cobalt Audio*\nTitle: ${audio.info.title}\nSize: ${formatBytes(audio.buffer.byteLength)}`,
+          });
+        }
+      } else {
+        const video = await downloadCobaltVideo(targetUrl);
+        if (!video) {
+          throw new Error('Cobalt could not extract video from this URL.');
+        }
+
+        const formatBytes = (bytes: number) => {
+          if (bytes < 1024) return `${bytes} B`;
+          if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+          return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        };
+
+        const lines = [
+          `⚡ *Cobalt Download*`,
+          video.info?.title ? `Title: ${video.info.title}` : undefined,
+          `Size: ${formatBytes(video.buffer.byteLength)}`,
+        ].filter(Boolean);
+
+        await ctx.socket.sendMessage(ctx.message.key.remoteJid!, {
+          video: video.buffer,
+          mimetype: video.mimetype || 'video/mp4',
+          caption: lines.join('\n'),
+        });
+      }
+    } catch (err: any) {
+      await ctx.reply(
+        formatFailed({
+          title: 'Cobalt Downloader',
+          reason: err?.message || 'Failed to download media via Cobalt.',
+          tryHint: 'Check if the URL is publicly accessible or try again later.',
+        })
+      );
+    }
+  },
+};
+
 export const SocialCommands = [
   ...videoProviders.map(createSocialVideoCommand),
+  CobaltCommand,
   InstagramProfileCommand,
   TikTokProfileCommand,
   TwitterProfileCommand,

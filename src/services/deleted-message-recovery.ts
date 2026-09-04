@@ -43,6 +43,7 @@ export type DeletedMessageRecord = RecoverableMessage & {
 type RecoveryState = {
   messages: RecoverableMessage[];
   deleted: DeletedMessageRecord[];
+  viewOnce: DeletedMessageRecord[];
 };
 
 const fallbackPath = path.join(config.SESSION_PATH, 'deleted-messages.json');
@@ -82,7 +83,7 @@ function maxMediaTotalBytes(): number {
 }
 
 function emptyState(): RecoveryState {
-  return { messages: [], deleted: [] };
+  return { messages: [], deleted: [], viewOnce: [] };
 }
 
 function mediaStorage(media: RecoverableMediaRecord): 'local' | 'mega' {
@@ -102,7 +103,7 @@ function sameMedia(left: RecoverableMediaRecord, right: RecoverableMediaRecord):
 }
 
 function mediaRecords(state: RecoveryState): RecoverableMediaRecord[] {
-  return [...state.messages, ...state.deleted]
+  return [...state.messages, ...state.deleted, ...(state.viewOnce || [])]
     .map((item) => item.media)
     .filter((item): item is RecoverableMediaRecord => Boolean(item));
 }
@@ -127,7 +128,7 @@ function totalStoredMediaBytes(state: RecoveryState): number {
 
 function sortedMediaRecords(state: RecoveryState): RecoverableMediaRecord[] {
   const seen = new Set<string>();
-  const records = [...state.messages, ...state.deleted]
+  const records = [...state.messages, ...state.deleted, ...(state.viewOnce || [])]
     .filter((item) => item.media)
     .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
 
@@ -163,7 +164,7 @@ function deleteStoredMediaSoon(media: RecoverableMediaRecord): void {
 }
 
 function removeMediaFromState(state: RecoveryState, media: RecoverableMediaRecord): void {
-  for (const item of [...state.messages, ...state.deleted]) {
+  for (const item of [...state.messages, ...state.deleted, ...(state.viewOnce || [])]) {
     if (item.media && sameMedia(item.media, media)) delete item.media;
   }
 }
@@ -209,6 +210,7 @@ function loadState(): RecoveryState {
     stateCache = {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       deleted: Array.isArray(parsed.deleted) ? parsed.deleted : [],
+      viewOnce: Array.isArray(parsed.viewOnce) ? parsed.viewOnce : [],
     };
     return stateCache;
   } catch {
@@ -221,6 +223,7 @@ function saveState(state: RecoveryState): void {
   const nextState = {
     messages: state.messages.slice(-maxMessages()),
     deleted: state.deleted.slice(-maxDeleted()),
+    viewOnce: (state.viewOnce || []).slice(-maxDeleted()),
   };
   removeStaleMediaFiles(state, nextState);
   stateCache = nextState;
@@ -261,9 +264,18 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
     message.ephemeralMessage?.message ||
     message.documentWithCaptionMessage?.message ||
     message.editedMessage?.message;
-  if (wrappedMessage) return unwrapMessageInfo(wrappedMessage, depth + 1);
+  if (wrappedMessage) {
+    const inner = unwrapMessageInfo(wrappedMessage, depth + 1);
+    return inner;
+  }
 
-  return { message, viewOnce: false };
+  const hasDirectViewOnce = Boolean(
+    (message.imageMessage as any)?.viewOnce ||
+    (message.videoMessage as any)?.viewOnce ||
+    (message.audioMessage as any)?.viewOnce
+  );
+
+  return { message, viewOnce: hasDirectViewOnce };
 }
 
 function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
@@ -305,9 +317,15 @@ function recoverableMedia(message: proto.IMessage | null | undefined): {
 } | null {
   const unwrapped = unwrapMessageInfo(message);
   if (!unwrapped.message) return null;
-  if (unwrapped.message.audioMessage) return { kind: 'audio', media: unwrapped.message.audioMessage, viewOnce: unwrapped.viewOnce };
-  if (unwrapped.message.videoMessage) return { kind: 'video', media: unwrapped.message.videoMessage, viewOnce: unwrapped.viewOnce };
-  if (unwrapped.message.imageMessage) return { kind: 'image', media: unwrapped.message.imageMessage, viewOnce: unwrapped.viewOnce };
+  const isVo =
+    unwrapped.viewOnce ||
+    Boolean((unwrapped.message.imageMessage as any)?.viewOnce) ||
+    Boolean((unwrapped.message.videoMessage as any)?.viewOnce) ||
+    Boolean((unwrapped.message.audioMessage as any)?.viewOnce);
+
+  if (unwrapped.message.audioMessage) return { kind: 'audio', media: unwrapped.message.audioMessage, viewOnce: isVo };
+  if (unwrapped.message.videoMessage) return { kind: 'video', media: unwrapped.message.videoMessage, viewOnce: isVo };
+  if (unwrapped.message.imageMessage) return { kind: 'image', media: unwrapped.message.imageMessage, viewOnce: isVo };
   return null;
 }
 
@@ -442,14 +460,14 @@ export async function recordRecoverableMessage(
   sender: SenderIdentity,
   text: string,
   timestampSeconds: number
-): Promise<void> {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return;
-  if (message.message?.protocolMessage) return;
+): Promise<DeletedMessageRecord | undefined> {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return undefined;
+  if (message.message?.protocolMessage) return undefined;
 
   const key = messageId(message);
   const chatJid = message.key.remoteJid;
   const id = message.key.id;
-  if (!key || !chatJid || !id) return;
+  if (!key || !chatJid || !id) return undefined;
 
   const type = messageType(message.message);
   const state = loadState();
@@ -457,21 +475,27 @@ export async function recordRecoverableMessage(
   try {
     media = await downloadRecoverableMedia(message, state);
   } catch (err) {
-    logger.warn({ err, messageId: id, chatJid }, 'Could not cache deleted-message media');
+    logger.warn({ err, messageId: id, chatJid }, 'Could not cache recoverable media');
   }
 
-  if (config.DELETED_MESSAGE_DEBUG) {
+  const isViewOnce = Boolean(type.startsWith('viewOnce:') || media?.viewOnce);
+
+  if (config.DELETED_MESSAGE_DEBUG || (isViewOnce && config.VIEW_ONCE_SAVER_ENABLED)) {
     logger.info(
       {
         chatJid,
         messageId: id,
         messageType: type,
-        viewOnce: type.startsWith('viewOnce:') || undefined,
+        viewOnce: isViewOnce || undefined,
         mediaKind: media?.kind,
         mediaStorage: media?.storage,
         mediaSize: media?.size,
       },
-      media ? 'Cached recoverable message media' : 'Cached recoverable message metadata'
+      isViewOnce
+        ? 'Captured view-once media for deleted-media recovery'
+        : media
+        ? 'Cached recoverable message media'
+        : 'Cached recoverable message metadata'
     );
   }
 
@@ -485,13 +509,39 @@ export async function recordRecoverableMessage(
     messageType: type,
     text: displayText(text || messageText(message.message), type),
     media,
-    viewOnce: type.startsWith('viewOnce:') || undefined,
+    viewOnce: isViewOnce || undefined,
     timestamp: timestampIso(timestampSeconds),
   };
 
   state.messages = state.messages.filter((item) => !sameStoredMessage(item, key));
   state.messages.push(next);
+
+  let savedViewOnceRecord: DeletedMessageRecord | undefined;
+
+  // View-once messages disappear upon viewing; save them to dedicated viewOnce records (and deleted-media storage)
+  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce && media) {
+    savedViewOnceRecord = {
+      ...next,
+      deletedAt: timestampIso(timestampSeconds),
+      deletedByJid: sender.jid,
+      deletedByName: sender.displayName,
+      deletedByNumber: sender.phoneNumber,
+      viewOnce: true,
+    };
+
+    if (!state.viewOnce) state.viewOnce = [];
+    const existingIndex = state.viewOnce.findIndex(
+      (item) => item.chatJid === savedViewOnceRecord!.chatJid && item.messageId === savedViewOnceRecord!.messageId
+    );
+    if (existingIndex >= 0) {
+      state.viewOnce[existingIndex] = { ...state.viewOnce[existingIndex], ...savedViewOnceRecord };
+    } else {
+      state.viewOnce.push(savedViewOnceRecord);
+    }
+  }
+
   saveState(state);
+  return savedViewOnceRecord;
 }
 
 export function recordDeletedMessageByKey(
@@ -502,7 +552,10 @@ export function recordDeletedMessageByKey(
   if (!config.DELETED_MESSAGE_RECOVERY_ENABLED || !key?.remoteJid || !key.id) return null;
 
   const state = loadState();
-  const stored = findStoredMessage(state, key);
+  const stored =
+    findStoredMessage(state, key) ||
+    (state.viewOnce || []).find((item) => item.chatJid === key.remoteJid && item.messageId === key.id);
+
   if (!stored) return null;
   if (alreadyDeleted(state, stored)) return null;
 
@@ -548,7 +601,7 @@ export function recordDeletedMessageFromUpdate(
   return recordDeletedMessageByKey(update.key, deletedBy, timestampSeconds);
 }
 
-export async function readDeletedMessageMedia(record: DeletedMessageRecord): Promise<Buffer | null> {
+export async function readDeletedMessageMedia(record: { media?: RecoverableMediaRecord }): Promise<Buffer | null> {
   const media = record.media;
   if (!media) return null;
 
@@ -558,6 +611,81 @@ export async function readDeletedMessageMedia(record: DeletedMessageRecord): Pro
 
   if (!media.path || !fs.existsSync(media.path)) return null;
   return fs.readFileSync(media.path);
+}
+
+export function findStoredMessageById(chatJid: string, messageId: string): RecoverableMessage | DeletedMessageRecord | null {
+  const state = loadState();
+  const foundVo = (state.viewOnce || []).find((m) => m.chatJid === chatJid && m.messageId === messageId);
+  if (foundVo) return foundVo;
+  const foundDeleted = state.deleted.find((m) => m.chatJid === chatJid && m.messageId === messageId);
+  if (foundDeleted) return foundDeleted;
+  const foundMessage = state.messages.find((m) => m.chatJid === chatJid && m.messageId === messageId);
+  return foundMessage || null;
+}
+
+export async function cacheAndStoreMedia(
+  chatJid: string,
+  id: string,
+  sender: SenderIdentity,
+  buffer: Buffer,
+  kind: 'image' | 'video' | 'audio',
+  mimetype: string,
+  caption = '',
+  viewOnce = true,
+  ptt = false
+): Promise<DeletedMessageRecord> {
+  const state = loadState();
+  const extension = extensionFromMedia(kind, mimetype);
+  const fileName = `${safeFilePart(chatJid)}-${safeFilePart(id)}.${extension}`;
+
+  const media = await storeMediaBuffer({
+    kind,
+    mimetype,
+    extension,
+    fileName,
+    size: buffer.length,
+    ptt: ptt || undefined,
+    viewOnce,
+  }, buffer);
+
+  const timestampIsoNow = new Date().toISOString();
+  const record: DeletedMessageRecord = {
+    chatJid,
+    messageId: id,
+    senderJid: sender.jid,
+    senderName: sender.displayName,
+    senderNumber: sender.phoneNumber,
+    fromMe: sender.fromMe,
+    messageType: viewOnce ? `viewOnce:${kind}Message` : `${kind}Message`,
+    text: displayText(caption, `${kind}Message`),
+    media,
+    viewOnce,
+    timestamp: timestampIsoNow,
+    deletedAt: timestampIsoNow,
+    deletedByJid: sender.jid,
+    deletedByName: sender.displayName,
+    deletedByNumber: sender.phoneNumber,
+  };
+
+  if (viewOnce) {
+    if (!state.viewOnce) state.viewOnce = [];
+    const existingIndex = state.viewOnce.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+    if (existingIndex >= 0) {
+      state.viewOnce[existingIndex] = record;
+    } else {
+      state.viewOnce.push(record);
+    }
+  } else {
+    const existingIndex = state.deleted.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+    if (existingIndex >= 0) {
+      state.deleted[existingIndex] = record;
+    } else {
+      state.deleted.push(record);
+    }
+  }
+
+  saveState(state);
+  return record;
 }
 
 export type DeletedChatSummary = {
@@ -596,8 +724,22 @@ export function listDeletedMessages(chatJid?: string, limit = 30): DeletedMessag
     .reverse();
 }
 
+export function listViewOnceMessages(chatJid?: string, limit = 30): DeletedMessageRecord[] {
+  if (!config.VIEW_ONCE_SAVER_ENABLED) return [];
+  const state = loadState();
+  const isAll = !chatJid || chatJid === 'all' || chatJid === 'global';
+  const list = (state.viewOnce || []).filter((item) => {
+    return isAll || item.chatJid === chatJid;
+  });
+  return list.slice(-boundedNumber(limit, 30, 1, 500)).reverse();
+}
+
+export function getAllViewOnceMessages(): DeletedMessageRecord[] {
+  return listViewOnceMessages('all', maxDeleted());
+}
+
 export function listDeletedChats(): DeletedChatSummary[] {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return [];
 
   const state = loadState();
   const map = new Map<string, { count: number; lastDeletedAt: string; lastSenderName: string }>();

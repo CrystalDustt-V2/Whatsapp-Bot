@@ -6,6 +6,7 @@ export { UrlEncodeCommand as urlencode } from './urlencode';
 export { UrlDecodeCommand as urldecode } from './urldecode';
 export { PasswordCommand as password } from './password';
 export { DeletedMessageCommand as deleted } from './deleted';
+export { ViewOnceCommand as viewonce } from './viewonce';
 export { QRCommand as qr } from './qr';
 export { UpsideDownCommand as upside } from './upside';
 export { NicknameCommand as nickname, FakeIdentityCommand as fakeid, ColorCommand as color } from './random';

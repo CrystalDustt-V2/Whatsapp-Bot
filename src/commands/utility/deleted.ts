@@ -3,6 +3,7 @@ import {
   listDeletedMessages,
   getAllDeletedMessages,
   listDeletedChats,
+  listViewOnceMessages,
   readDeletedMessageMedia,
   type DeletedMessageRecord,
 } from '../../services/deleted-message-recovery';
@@ -26,7 +27,7 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function formatChatLabel(chatJid: string): string {
+export function formatChatLabel(chatJid: string): string {
   if (chatJid.endsWith('@g.us')) {
     const id = chatJid.replace('@g.us', '');
     return `Group [${id.length > 15 ? `${id.slice(0, 12)}...` : id}]`;
@@ -37,7 +38,7 @@ function formatChatLabel(chatJid: string): string {
   return `Chat [${chatJid}]`;
 }
 
-function isOwnerOrSelf(ctx: BotContext): boolean {
+export function isOwnerOrSelf(ctx: BotContext): boolean {
   if (ctx.sender.fromMe || ctx.message.key.fromMe) return true;
 
   const senderNumber = ctx.sender.phoneNumber?.replace(/\D/g, '') || '';
@@ -55,29 +56,39 @@ function isOwnerOrSelf(ctx: BotContext): boolean {
   return false;
 }
 
-function formatRecord(record: DeletedMessageRecord, index: number, showChat = false): string {
+export function formatRecord(record: DeletedMessageRecord, index: number, showChat = false): string {
+  const isVo = Boolean(record.viewOnce || record.media?.viewOnce || record.messageType?.startsWith('viewOnce:'));
+  const header = isVo ? `*Saved View-Once message #${index}*` : `*Deleted message #${index}*`;
   const chatLine = showChat ? `Chat: ${formatChatLabel(record.chatJid)} (${record.chatJid})\n` : '';
   const mediaLine = record.media
-    ? `Media: saved ${record.media.viewOnce ? 'view-once ' : ''}${record.media.kind} (${formatBytes(record.media.size)})\n`
+    ? `Media: saved ${isVo ? 'view-once ' : ''}${record.media.kind} (${formatBytes(record.media.size)})\n`
     : '';
 
+  const actionLine =
+    isVo && record.deletedByName === record.senderName
+      ? `Action: Auto-saved View Once media\n`
+      : `Deleted by: ${record.deletedByName}${record.deletedByNumber ? ` (${record.deletedByNumber})` : ''}\n`;
+
+  const timeAction = isVo && record.deletedByName === record.senderName ? 'Saved' : 'Deleted';
+
   return (
-    `*Deleted message #${index}*\n` +
+    `${header}\n` +
     chatLine +
     `From: ${record.senderName}${record.senderNumber ? ` (${record.senderNumber})` : ''}\n` +
-    `Deleted by: ${record.deletedByName}${record.deletedByNumber ? ` (${record.deletedByNumber})` : ''}\n` +
+    actionLine +
     `Type: ${record.messageType}\n` +
     mediaLine +
     `Sent: ${formatTime(record.timestamp)}\n` +
-    `Deleted: ${formatTime(record.deletedAt)}\n\n` +
+    `${timeAction}: ${formatTime(record.deletedAt)}\n\n` +
     `${record.text || (record.media ? `[${record.media.kind.toUpperCase()} ATTACHMENT]` : '')}`
   );
 }
 
-function formatList(records: DeletedMessageRecord[], title = 'Recovered deleted messages', showChat = false): string {
+export function formatList(records: DeletedMessageRecord[], title = 'Recovered deleted & view-once messages', showChat = false): string {
   const lines = records.map((record, index) => {
+    const isVo = Boolean(record.viewOnce || record.media?.viewOnce || record.messageType?.startsWith('viewOnce:'));
     const chatPrefix = showChat ? `${formatChatLabel(record.chatJid)} ` : '';
-    const media = record.media ? ` [${record.media.viewOnce ? 'view-once ' : ''}${record.media.kind}]` : '';
+    const media = record.media ? ` [${isVo ? 'view-once ' : ''}${record.media.kind}]` : '';
     return `${index + 1}. ${chatPrefix}${record.senderName}${media} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
   });
 
@@ -88,7 +99,7 @@ function formatList(records: DeletedMessageRecord[], title = 'Recovered deleted 
   );
 }
 
-async function sendRecoveredMedia(
+export async function sendRecoveredMedia(
   ctx: BotContext,
   record: DeletedMessageRecord,
   formattedText: string
@@ -140,11 +151,12 @@ export const DeletedMessageCommand: Command = {
   name: 'deleted',
   aliases: ['antidelete', 'undelete', 'revoke'],
   category: CommandCategory.UTILITY,
-  description: 'Recover deleted messages and media with multi-page support (Owner) or current chat (Users)',
-  usage: 'deleted [list [page]|chats|number]',
+  description: 'Recover deleted messages and saved view-once media with multi-page support',
+  usage: 'deleted [list [page]|viewonce [page]|chats|number]',
   examples: [
     'deleted',
     'deleted list',
+    'deleted viewonce',
     'deleted list 2',
     'deleted 1',
     'deleted chats',
@@ -197,6 +209,12 @@ export const DeletedMessageCommand: Command = {
         }
 
         await ctx.reply(formatList(records, `Deleted Messages for ${formatChatLabel(targetJid)}`, false));
+        return;
+      }
+
+      // 3. Owner subcommand: .deleted viewonce or .deleted vo -> redirect to .viewonce
+      if (arg0 === 'viewonce' || arg0 === 'vo') {
+        await ctx.reply(`👉 View-once media is isolated and accessible only via *${config.BOT_PREFIX}viewonce* (or *${config.BOT_PREFIX}vo*).`);
         return;
       }
 
@@ -273,6 +291,11 @@ export const DeletedMessageCommand: Command = {
     // ==========================================
     // NON-OWNER USERS: Current Chat Only Mode
     // ==========================================
+    if (arg0 === 'viewonce' || arg0 === 'vo') {
+      await ctx.reply('⛔ Access denied. View-once messages can only be viewed and restored by the bot owner.');
+      return;
+    }
+
     const localRecords = listDeletedMessages(currentChatJid, 30);
     if (!localRecords.length) {
       await ctx.reply('No deleted messages saved for this chat yet. I can only recover messages I saw while I was running.');

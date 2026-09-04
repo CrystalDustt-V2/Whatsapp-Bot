@@ -55,6 +55,7 @@ import {
   urldecode,
   password,
   deleted,
+  viewonce,
   qr,
   upside,
   nickname,
@@ -244,6 +245,7 @@ export function loadCommands(): void {
   commandRegistry.register(urldecode);
   commandRegistry.register(password);
   commandRegistry.register(deleted);
+  commandRegistry.register(viewonce);
   commandRegistry.register(qr);
   commandRegistry.register(upside);
   commandRegistry.register(nickname);
