@@ -4,7 +4,7 @@ import * as path from 'path';
 import config from '../config';
 import logger from '../core/logger';
 import type { SenderIdentity } from '../types';
-import { deleteMegaFile, downloadMegaFile, uploadMegaFile } from './mega-storage';
+import { deleteMegaFile, downloadMegaFile, findMegaFileByNamePattern, uploadMegaFile } from './mega-storage';
 
 type RecoverableMessage = {
   chatJid: string;
@@ -430,7 +430,11 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
       'Primary stream download failed, attempting downloadMediaMessage fallback...'
     );
     try {
-      buffer = (await downloadMediaMessage(message, 'buffer', {})) as Buffer;
+      const normalizedMsg: WAMessage = {
+        ...message,
+        message: unwrapMessage(message.message) || message.message,
+      };
+      buffer = (await downloadMediaMessage(normalizedMsg, 'buffer', {})) as Buffer;
     } catch (fallbackErr: any) {
       logger.warn({ err: fallbackErr?.message, messageId: message.key.id }, 'All media download attempts failed');
       return undefined;
@@ -637,12 +641,15 @@ export function recordDeletedMessageFromUpdate(
   return recordDeletedMessageByKey(update.key, deletedBy, timestampSeconds);
 }
 
-export async function readDeletedMessageMedia(record: { media?: RecoverableMediaRecord }): Promise<Buffer | null> {
+export async function readDeletedMessageMedia(record: {
+  media?: RecoverableMediaRecord;
+  messageId?: string;
+  chatJid?: string;
+}): Promise<Buffer | null> {
   const media = record.media;
-  if (!media) return null;
 
   // 1. Check direct local file path first
-  if (media.path && fs.existsSync(media.path)) {
+  if (media?.path && fs.existsSync(media.path)) {
     try {
       return fs.readFileSync(media.path);
     } catch (err) {
@@ -651,7 +658,7 @@ export async function readDeletedMessageMedia(record: { media?: RecoverableMedia
   }
 
   // 2. Check mediaDir with fileName
-  if (media.fileName) {
+  if (media?.fileName) {
     const directPath = path.join(mediaDir, media.fileName);
     if (fs.existsSync(directPath)) {
       try {
@@ -671,12 +678,111 @@ export async function readDeletedMessageMedia(record: { media?: RecoverableMedia
     }
   }
 
-  // 3. Fallback to MEGA cloud download if file is in MEGA
-  if (media.megaNodeId) {
+  // 3. Fallback to MEGA cloud download if file has megaNodeId
+  if (media?.megaNodeId) {
     try {
-      return await downloadMegaFile(media.megaNodeId);
+      const buffer = await downloadMegaFile(media.megaNodeId);
+      if (buffer && media.fileName) {
+        // Cache to local deleted-media so future reads are instantaneous
+        const directPath = path.join(mediaDir, media.fileName);
+        fs.mkdirSync(mediaDir, { recursive: true });
+        fs.writeFileSync(directPath, buffer);
+      }
+      return buffer;
     } catch (err) {
       logger.warn({ err, megaNodeId: media.megaNodeId }, 'Failed to download media from MEGA');
+    }
+  }
+
+  // 4. If media buffer is still not resolved, attempt deep search by messageId
+  if (record.messageId) {
+    const cleanId = safeFilePart(record.messageId);
+
+    // 4a. Check other recorded messages (messages, deleted, viewOnce) for a matching media record
+    const state = loadState();
+    const sibling = [...(state.viewOnce || []), ...state.deleted, ...state.messages].find(
+      (m) => m.messageId === record.messageId && m.media && m !== record
+    );
+    if (sibling?.media) {
+      const siblingBuf = await readDeletedMessageMedia({ media: sibling.media });
+      if (siblingBuf) {
+        record.media = sibling.media;
+        return siblingBuf;
+      }
+    }
+
+    // 4b. Check local mediaDir for any file matching cleanId
+    try {
+      if (fs.existsSync(mediaDir)) {
+        const files = fs.readdirSync(mediaDir);
+        const match = files.find((f) => f.includes(cleanId));
+        if (match) {
+          const directPath = path.join(mediaDir, match);
+          const buf = fs.readFileSync(directPath);
+          const ext = path.extname(match).slice(1).toLowerCase();
+          const kind: 'audio' | 'video' | 'image' = ['jpg', 'jpeg', 'png', 'webp'].includes(ext)
+            ? 'image'
+            : ['mp3', 'ogg', 'opus', 'm4a', 'aac', 'wav'].includes(ext)
+            ? 'audio'
+            : 'video';
+          const mimetype =
+            kind === 'image'
+              ? `image/${ext === 'jpg' ? 'jpeg' : ext}`
+              : kind === 'audio'
+              ? `audio/${ext}`
+              : 'video/mp4';
+          record.media = {
+            kind,
+            mimetype,
+            extension: ext,
+            fileName: match,
+            path: directPath,
+            size: buf.length,
+          };
+          return buf;
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, messageId: record.messageId }, 'Error scanning local mediaDir for messageId');
+    }
+
+    // 4c. Check MEGA cloud storage by searching for cleanId pattern
+    if (config.DELETED_MESSAGE_MEDIA_STORAGE === 'mega') {
+      try {
+        const megaMatch = await findMegaFileByNamePattern(cleanId);
+        if (megaMatch) {
+          const buf = await downloadMegaFile(megaMatch.nodeId);
+          const ext = path.extname(megaMatch.name).slice(1).toLowerCase();
+          const kind: 'audio' | 'video' | 'image' = ['jpg', 'jpeg', 'png', 'webp'].includes(ext)
+            ? 'image'
+            : ['mp3', 'ogg', 'opus', 'm4a', 'aac', 'wav'].includes(ext)
+            ? 'audio'
+            : 'video';
+          const mimetype =
+            kind === 'image'
+              ? `image/${ext === 'jpg' ? 'jpeg' : ext}`
+              : kind === 'audio'
+              ? `audio/${ext}`
+              : 'video/mp4';
+          const localPath = path.join(mediaDir, megaMatch.name);
+          fs.mkdirSync(mediaDir, { recursive: true });
+          fs.writeFileSync(localPath, buf);
+
+          record.media = {
+            kind,
+            mimetype,
+            extension: ext,
+            fileName: megaMatch.name,
+            path: localPath,
+            megaNodeId: megaMatch.nodeId,
+            storage: 'mega',
+            size: buf.length,
+          };
+          return buf;
+        }
+      } catch (err) {
+        logger.warn({ err, messageId: record.messageId }, 'Error searching MEGA cloud storage for messageId');
+      }
     }
   }
 

@@ -105,16 +105,10 @@ export async function sendRecoveredMedia(
   formattedText: string
 ): Promise<void> {
   const targetJid = ctx.message.key.remoteJid || ctx.sender.chatJid;
-  if (!record.media) {
-    await ctx.reply(formattedText);
-    return;
-  }
 
   const buffer = await readDeletedMessageMedia(record);
-  if (!buffer) {
-    await ctx.reply(
-      `${formattedText}\n\n⚠️ _The deleted media metadata is saved, but the file is no longer on storage._`
-    );
+  if (!buffer || !record.media) {
+    await ctx.reply(formattedText);
     return;
   }
 

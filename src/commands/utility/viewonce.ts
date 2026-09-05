@@ -148,15 +148,12 @@ export const ViewOnceCommand: Command = {
       if (quotedStanzaId) {
         const stored = findStoredMessageById(currentChatJid, quotedStanzaId);
         if (stored) {
-          if (stored.media) {
-            const buffer = await readDeletedMessageMedia(stored);
-            if (buffer) {
-              const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
-              await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted);
-              return;
-            }
+          const buffer = await readDeletedMessageMedia(stored);
+          const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
+          if (buffer) {
+            await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted);
+            return;
           } else {
-            const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
             await ctx.reply(formatted);
             return;
           }

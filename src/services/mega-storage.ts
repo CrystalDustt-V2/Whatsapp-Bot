@@ -75,3 +75,23 @@ export async function deleteMegaFile(nodeId: string): Promise<void> {
   const file = await findMegaFile(nodeId);
   await file.delete(true);
 }
+
+export async function findMegaFileByNamePattern(pattern: string): Promise<{ nodeId: string; name: string; size: number } | null> {
+  if (!pattern) return null;
+  try {
+    const folder = await targetFolder();
+    const children = folder.children || [];
+    const found = children.find((f) => !f.directory && f.name && f.name.includes(pattern));
+    if (found?.nodeId) {
+      return {
+        nodeId: found.nodeId,
+        name: found.name || '',
+        size: found.size || 0,
+      };
+    }
+  } catch {
+    // Search fallback
+  }
+  return null;
+}
+
