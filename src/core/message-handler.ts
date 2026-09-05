@@ -92,6 +92,7 @@ export class MessageHandler {
   }
 
   private getMessageText(message: proto.IMessage): string {
+    const deviceSentMessage = message.deviceSentMessage?.message;
     const viewOnceMessage =
       message.viewOnceMessage?.message ||
       message.viewOnceMessageV2?.message ||
@@ -100,6 +101,7 @@ export class MessageHandler {
     const documentWithCaptionMessage = message.documentWithCaptionMessage?.message;
     const editedMessage = message.editedMessage?.message;
     const wrappedMessage =
+      deviceSentMessage ||
       viewOnceMessage ||
       ephemeralMessage ||
       documentWithCaptionMessage ||
@@ -212,24 +214,6 @@ export class MessageHandler {
 
       recordAiMemoryMessage(message, sender, text, messageType, timestamp);
 
-      if (Date.now() < this.ignoreUntilMs) {
-        markMessageSeen(messageKey);
-        logger.debug(
-          { ...logContext, ignoreUntilMs: this.ignoreUntilMs },
-          'Skipping message during startup backlog drain'
-        );
-        return;
-      }
-
-      if (timestamp > 0 && timestamp < this.ignoreBeforeSeconds) {
-        markMessageSeen(messageKey);
-        logger.debug(
-          { ...logContext, timestamp, ignoreBeforeSeconds: this.ignoreBeforeSeconds },
-          'Skipping old message from before this connection'
-        );
-        return;
-      }
-
       const recovered = recordDeletedMessageFromProtocol(message, sender, timestamp);
       if (recovered) {
         markMessageSeen(messageKey);
@@ -243,6 +227,24 @@ export class MessageHandler {
       const savedViewOnce = await recordRecoverableMessage(message, sender, text, timestamp);
       if (savedViewOnce && config.VIEW_ONCE_AUTO_FORWARD) {
         await this.forwardViewOnceToOwner(savedViewOnce);
+      }
+
+      if (Date.now() < this.ignoreUntilMs) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { ...logContext, ignoreUntilMs: this.ignoreUntilMs },
+          'Skipping message command during startup backlog drain'
+        );
+        return;
+      }
+
+      if (timestamp > 0 && timestamp < this.ignoreBeforeSeconds) {
+        markMessageSeen(messageKey);
+        logger.debug(
+          { ...logContext, timestamp, ignoreBeforeSeconds: this.ignoreBeforeSeconds },
+          'Skipping old message command from before this connection'
+        );
+        return;
       }
 
       if (!text.startsWith(config.BOT_PREFIX)) {

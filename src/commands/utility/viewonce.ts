@@ -1,4 +1,4 @@
-import { downloadContentFromMessage, type MediaType, proto } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, type MediaType, proto } from '@whiskeysockets/baileys';
 import config from '../../config';
 import logger from '../../core/logger';
 import {
@@ -30,7 +30,11 @@ function preview(value: string, max = 60): string {
 }
 
 function unwrapQuotedMessage(message?: proto.IMessage | null, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
-  if (!message || depth > 8) return { message: message || null, viewOnce: false };
+  if (!message || depth > 10) return { message: message || null, viewOnce: false };
+
+  if (message.deviceSentMessage?.message) {
+    return unwrapQuotedMessage(message.deviceSentMessage.message, depth + 1);
+  }
 
   const viewOnceMessage =
     message.viewOnceMessage?.message ||
@@ -53,7 +57,8 @@ function unwrapQuotedMessage(message?: proto.IMessage | null, depth = 0): { mess
   const hasDirectViewOnce = Boolean(
     (message.imageMessage as any)?.viewOnce ||
     (message.videoMessage as any)?.viewOnce ||
-    (message.audioMessage as any)?.viewOnce
+    (message.audioMessage as any)?.viewOnce ||
+    (message.documentMessage as any)?.viewOnce
   );
 
   return { message, viewOnce: hasDirectViewOnce };
@@ -142,11 +147,17 @@ export const ViewOnceCommand: Command = {
       // 1. Check if the message is already saved in our deleted-media cache
       if (quotedStanzaId) {
         const stored = findStoredMessageById(currentChatJid, quotedStanzaId);
-        if (stored && stored.media) {
-          const buffer = await readDeletedMessageMedia(stored);
-          if (buffer) {
+        if (stored) {
+          if (stored.media) {
+            const buffer = await readDeletedMessageMedia(stored);
+            if (buffer) {
+              const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
+              await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted);
+              return;
+            }
+          } else {
             const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
-            await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted);
+            await ctx.reply(formatted);
             return;
           }
         }
@@ -158,12 +169,26 @@ export const ViewOnceCommand: Command = {
         if (extracted) {
           try {
             await ctx.reply('⏳ Decrypting view-once media from quoted message...');
-            const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
-            const chunks: Buffer[] = [];
-            for await (const chunk of stream) {
-              chunks.push(Buffer.from(chunk));
+            let buffer: Buffer | undefined;
+
+            try {
+              const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
+              const chunks: Buffer[] = [];
+              for await (const chunk of stream) {
+                chunks.push(Buffer.from(chunk));
+              }
+              buffer = Buffer.concat(chunks);
+            } catch {
+              const fakeMsg: any = {
+                key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
+                message: quotedMessage,
+              };
+              buffer = (await downloadMediaMessage(fakeMsg, 'buffer', {}).catch(() => undefined)) as Buffer | undefined;
             }
-            const buffer = Buffer.concat(chunks);
+
+            if (!buffer || buffer.length === 0) {
+              throw new Error('Decrypted media buffer is empty or unavailable');
+            }
 
             const senderIdentity: SenderIdentity = {
               jid: quotedParticipant || ctx.sender.jid,

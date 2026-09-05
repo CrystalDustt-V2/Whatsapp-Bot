@@ -1,4 +1,4 @@
-import { downloadContentFromMessage, proto, type MediaType, type WAMessage, type WAMessageUpdate } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, proto, type MediaType, type WAMessage, type WAMessageUpdate } from '@whiskeysockets/baileys';
 import * as fs from 'fs';
 import * as path from 'path';
 import config from '../config';
@@ -48,8 +48,13 @@ type RecoveryState = {
 
 const fallbackPath = path.join(config.SESSION_PATH, 'deleted-messages.json');
 const dataPath = resolveDataPath(config.DELETED_MESSAGE_FILE, fallbackPath);
-const fallbackMediaDir = path.join(config.SESSION_PATH, 'deleted-media');
-const mediaDir = resolveDataPath(config.DELETED_MESSAGE_MEDIA_DIR, fallbackMediaDir);
+const fallbackMediaDir = path.resolve(process.cwd(), 'deleted-media');
+export const mediaDir = resolveDataPath(config.DELETED_MESSAGE_MEDIA_DIR, fallbackMediaDir);
+try {
+  fs.mkdirSync(mediaDir, { recursive: true });
+} catch {
+  // Directory initialization
+}
 let stateCache: RecoveryState | null = null;
 
 function resolveDataPath(value: string | undefined, fallback: string): string {
@@ -249,7 +254,12 @@ function messageId(message: WAMessage): string | null {
 
 function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
   if (!message) return { message: null, viewOnce: false };
-  if (depth > 8) return { message, viewOnce: false };
+  if (depth > 10) return { message, viewOnce: false };
+
+  if (message.deviceSentMessage?.message) {
+    const inner = unwrapMessageInfo(message.deviceSentMessage.message, depth + 1);
+    return inner;
+  }
 
   const viewOnceMessage =
     message.viewOnceMessage?.message ||
@@ -272,7 +282,8 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
   const hasDirectViewOnce = Boolean(
     (message.imageMessage as any)?.viewOnce ||
     (message.videoMessage as any)?.viewOnce ||
-    (message.audioMessage as any)?.viewOnce
+    (message.audioMessage as any)?.viewOnce ||
+    (message.documentMessage as any)?.viewOnce
   );
 
   return { message, viewOnce: hasDirectViewOnce };
@@ -321,7 +332,8 @@ function recoverableMedia(message: proto.IMessage | null | undefined): {
     unwrapped.viewOnce ||
     Boolean((unwrapped.message.imageMessage as any)?.viewOnce) ||
     Boolean((unwrapped.message.videoMessage as any)?.viewOnce) ||
-    Boolean((unwrapped.message.audioMessage as any)?.viewOnce);
+    Boolean((unwrapped.message.audioMessage as any)?.viewOnce) ||
+    Boolean((unwrapped.message.documentMessage as any)?.viewOnce);
 
   if (unwrapped.message.audioMessage) return { kind: 'audio', media: unwrapped.message.audioMessage, viewOnce: isVo };
   if (unwrapped.message.videoMessage) return { kind: 'video', media: unwrapped.message.videoMessage, viewOnce: isVo };
@@ -344,32 +356,36 @@ async function storeMediaBuffer(
   base: Omit<RecoverableMediaRecord, 'path' | 'megaNodeId' | 'storage'>,
   buffer: Buffer
 ): Promise<RecoverableMediaRecord> {
-  if (config.DELETED_MESSAGE_MEDIA_STORAGE === 'mega') {
-    try {
-      const uploaded = await uploadMegaFile(base.fileName, buffer);
-      return {
-        ...base,
-        storage: 'mega',
-        megaNodeId: uploaded.id,
-        size: uploaded.size || base.size,
-      };
-    } catch (err) {
-      logger.warn({ err, fileName: base.fileName }, 'Could not upload deleted-message media to MEGA; storing locally instead');
-    }
-  }
-
+  // Always persist file directly to local deleted-media folder
   const filePath = path.join(mediaDir, base.fileName);
   fs.mkdirSync(mediaDir, { recursive: true });
   fs.writeFileSync(filePath, buffer);
+
+  let megaNodeId: string | undefined;
+  let storageType: 'local' | 'mega' = 'local';
+
+  // If MEGA storage configured, also upload to MEGA as cloud backup
+  if (config.DELETED_MESSAGE_MEDIA_STORAGE === 'mega') {
+    try {
+      const uploaded = await uploadMegaFile(base.fileName, buffer);
+      megaNodeId = uploaded.id;
+      storageType = 'mega';
+    } catch (err) {
+      logger.warn({ err, fileName: base.fileName }, 'Could not upload deleted-message media to MEGA; local copy preserved in deleted-media');
+    }
+  }
+
   return {
     ...base,
-    storage: 'local',
+    storage: storageType,
+    megaNodeId,
     path: filePath,
+    size: buffer.length,
   };
 }
 
 async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState): Promise<RecoverableMediaRecord | undefined> {
-  if (!config.DELETED_MESSAGE_MEDIA_ENABLED) return undefined;
+  if (!config.DELETED_MESSAGE_MEDIA_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return undefined;
 
   const found = recoverableMedia(message.message);
   if (!found) {
@@ -387,28 +403,45 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
     return undefined;
   }
 
-  const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
-  const chunks: Buffer[] = [];
-  let size = 0;
-  const maxBytes = maxMediaBytes();
+  let buffer: Buffer | undefined;
 
-  for await (const chunk of stream) {
-    const buffer = Buffer.from(chunk);
-    size += buffer.length;
-    if (size > maxBytes) {
-      logger.warn(
-        { messageId: message.key.id, mediaKind: found.kind, maxMb: config.DELETED_MESSAGE_MEDIA_MAX_MB },
-        'Skipping deleted-message media cache because file is too large'
-      );
+  try {
+    const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const maxBytes = maxMediaBytes();
+
+    for await (const chunk of stream) {
+      const chunkBuf = Buffer.from(chunk);
+      size += chunkBuf.length;
+      if (size > maxBytes) {
+        logger.warn(
+          { messageId: message.key.id, mediaKind: found.kind, maxMb: config.DELETED_MESSAGE_MEDIA_MAX_MB },
+          'Skipping deleted-message media cache because file is too large'
+        );
+        return undefined;
+      }
+      chunks.push(chunkBuf);
+    }
+    buffer = Buffer.concat(chunks);
+  } catch (downloadErr: any) {
+    logger.warn(
+      { err: downloadErr?.message, messageId: message.key.id, mediaKind: found.kind },
+      'Primary stream download failed, attempting downloadMediaMessage fallback...'
+    );
+    try {
+      buffer = (await downloadMediaMessage(message, 'buffer', {})) as Buffer;
+    } catch (fallbackErr: any) {
+      logger.warn({ err: fallbackErr?.message, messageId: message.key.id }, 'All media download attempts failed');
       return undefined;
     }
-    chunks.push(buffer);
   }
+
+  if (!buffer || buffer.length === 0) return undefined;
 
   const mimetype = found.media.mimetype || '';
   const extension = extensionFromMedia(found.kind, mimetype);
   const fileName = `${safeFilePart(message.key.remoteJid || 'chat')}-${safeFilePart(message.key.id || Date.now().toString())}.${extension}`;
-  const buffer = Buffer.concat(chunks);
   const canStore = await pruneMediaForIncoming(state, buffer.length);
   if (!canStore) return undefined;
 
@@ -519,7 +552,7 @@ export async function recordRecoverableMessage(
   let savedViewOnceRecord: DeletedMessageRecord | undefined;
 
   // View-once messages disappear upon viewing; save them to dedicated viewOnce records (and deleted-media storage)
-  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce && media) {
+  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce) {
     savedViewOnceRecord = {
       ...next,
       deletedAt: timestampIso(timestampSeconds),
@@ -605,22 +638,67 @@ export async function readDeletedMessageMedia(record: { media?: RecoverableMedia
   const media = record.media;
   if (!media) return null;
 
-  if (mediaStorage(media) === 'mega') {
-    return media.megaNodeId ? downloadMegaFile(media.megaNodeId) : null;
+  // 1. Check direct local file path first
+  if (media.path && fs.existsSync(media.path)) {
+    try {
+      return fs.readFileSync(media.path);
+    } catch (err) {
+      logger.warn({ err, path: media.path }, 'Error reading local media path');
+    }
   }
 
-  if (!media.path || !fs.existsSync(media.path)) return null;
-  return fs.readFileSync(media.path);
+  // 2. Check mediaDir with fileName
+  if (media.fileName) {
+    const directPath = path.join(mediaDir, media.fileName);
+    if (fs.existsSync(directPath)) {
+      try {
+        return fs.readFileSync(directPath);
+      } catch (err) {
+        logger.warn({ err, path: directPath }, 'Error reading mediaDir file');
+      }
+    }
+
+    const sessionFallback = path.join(config.SESSION_PATH, 'deleted-media', media.fileName);
+    if (fs.existsSync(sessionFallback)) {
+      try {
+        return fs.readFileSync(sessionFallback);
+      } catch (err) {
+        logger.warn({ err, path: sessionFallback }, 'Error reading sessionFallback file');
+      }
+    }
+  }
+
+  // 3. Fallback to MEGA cloud download if file is in MEGA
+  if (media.megaNodeId) {
+    try {
+      return await downloadMegaFile(media.megaNodeId);
+    } catch (err) {
+      logger.warn({ err, megaNodeId: media.megaNodeId }, 'Failed to download media from MEGA');
+    }
+  }
+
+  return null;
 }
 
 export function findStoredMessageById(chatJid: string, messageId: string): RecoverableMessage | DeletedMessageRecord | null {
   const state = loadState();
-  const foundVo = (state.viewOnce || []).find((m) => m.chatJid === chatJid && m.messageId === messageId);
-  if (foundVo) return foundVo;
-  const foundDeleted = state.deleted.find((m) => m.chatJid === chatJid && m.messageId === messageId);
-  if (foundDeleted) return foundDeleted;
-  const foundMessage = state.messages.find((m) => m.chatJid === chatJid && m.messageId === messageId);
-  return foundMessage || null;
+  let found: RecoverableMessage | DeletedMessageRecord | undefined;
+
+  // 1. Exact match with chatJid
+  found = (state.viewOnce || []).find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
+  if (found) return found;
+  found = state.deleted.find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
+  if (found) return found;
+  found = state.messages.find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
+  if (found) return found;
+
+  // 2. Global match by messageId across all chats
+  found = (state.viewOnce || []).find((m) => m.messageId === messageId);
+  if (found) return found;
+  found = state.deleted.find((m) => m.messageId === messageId);
+  if (found) return found;
+  found = state.messages.find((m) => m.messageId === messageId);
+  return found || null;
 }
 
 export async function cacheAndStoreMedia(
