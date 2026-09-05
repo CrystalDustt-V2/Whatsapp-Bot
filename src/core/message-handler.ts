@@ -192,8 +192,9 @@ export class MessageHandler {
       }
 
       const timestamp = getTimestampSeconds(message);
+      const isKeyViewOnce = Boolean((message.key as any)?.isViewOnce || (message as any)?.isViewOnce);
       const msg = message.message;
-      if (!msg) {
+      if (!msg && !isKeyViewOnce) {
         logger.debug(
           { fromMe: message.key.fromMe, remoteJid: message.key.remoteJid, messageId: message.key.id },
           'Skipping message without decrypted content'
@@ -202,8 +203,8 @@ export class MessageHandler {
       }
 
       const sender = getSenderIdentity(message, this.socket);
-      const messageType = Object.keys(msg)[0] || 'unknown';
-      const text = this.getMessageText(msg).trim();
+      const messageType = msg ? (Object.keys(msg)[0] || 'unknown') : (isKeyViewOnce ? 'viewOnce:unavailable' : 'unknown');
+      const text = msg ? this.getMessageText(msg).trim() : '';
       const logContext = {
         fromMe: message.key.fromMe,
         remoteJid: message.key.remoteJid,

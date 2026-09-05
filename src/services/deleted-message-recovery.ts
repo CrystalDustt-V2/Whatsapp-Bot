@@ -502,7 +502,9 @@ export async function recordRecoverableMessage(
   const id = message.key.id;
   if (!key || !chatJid || !id) return undefined;
 
-  const type = messageType(message.message);
+  const isKeyViewOnce = Boolean((message.key as any)?.isViewOnce || (message as any)?.isViewOnce);
+  const rawType = messageType(message.message);
+  const type = rawType.startsWith('viewOnce:') ? rawType : (isKeyViewOnce ? 'viewOnce:media' : rawType);
   const state = loadState();
   let media: RecoverableMediaRecord | undefined;
   try {
@@ -511,7 +513,7 @@ export async function recordRecoverableMessage(
     logger.warn({ err, messageId: id, chatJid }, 'Could not cache recoverable media');
   }
 
-  const isViewOnce = Boolean(type.startsWith('viewOnce:') || media?.viewOnce);
+  const isViewOnce = Boolean(type.startsWith('viewOnce:') || media?.viewOnce || isKeyViewOnce);
 
   if (config.DELETED_MESSAGE_DEBUG || (isViewOnce && config.VIEW_ONCE_SAVER_ENABLED)) {
     logger.info(
@@ -532,6 +534,7 @@ export async function recordRecoverableMessage(
     );
   }
 
+  const defaultText = isKeyViewOnce && !message.message ? '[View-Once media withheld by WhatsApp server for companion devices]' : '';
   const next: RecoverableMessage = {
     chatJid,
     messageId: id,
@@ -540,7 +543,7 @@ export async function recordRecoverableMessage(
     senderNumber: sender.phoneNumber,
     fromMe: sender.fromMe,
     messageType: type,
-    text: displayText(text || messageText(message.message), type),
+    text: displayText(text || messageText(message.message) || defaultText, type),
     media,
     viewOnce: isViewOnce || undefined,
     timestamp: timestampIso(timestampSeconds),
