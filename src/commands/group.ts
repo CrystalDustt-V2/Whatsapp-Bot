@@ -49,9 +49,12 @@ function senderJid(ctx: GroupContext): string | undefined {
   return ctx.sender.jid || ctx.message.key.participant || ctx.message.key.remoteJid || undefined;
 }
 
-function isOwner(jid?: string): boolean {
+function isOwner(jid?: string, ctx?: GroupContext): boolean {
+  if (ctx?.sender?.fromMe || ctx?.message?.key?.fromMe) return true;
   const owner = config.OWNER_NUMBER?.replace(/\D/g, '');
-  return Boolean(owner && jid?.startsWith(owner));
+  if (!owner) return false;
+  const num = jidNumber(jid) || ctx?.sender?.phoneNumber?.replace(/\D/g, '');
+  return Boolean(num === owner || (jid && (jid.startsWith(owner) || jid.includes(owner))));
 }
 
 function resolveTarget(ctx: GroupContext, group: GroupMetadata): Target | null {
@@ -114,7 +117,7 @@ async function requireGroup(ctx: GroupContext): Promise<GroupMetadata | null> {
 async function requireGroupManager(ctx: GroupContext, group: GroupMetadata): Promise<boolean> {
   const sender = senderJid(ctx);
   const senderParticipant = findParticipant(group, sender);
-  if (!isOwner(sender) && !isAdmin(senderParticipant)) {
+  if (!isOwner(sender, ctx) && !isAdmin(senderParticipant)) {
     await ctx.reply('Only group admins can use this command.');
     return false;
   }
@@ -672,7 +675,7 @@ export const TagAllCommand: Command = {
 
     const sender = senderJid(ctx);
     const senderParticipant = findParticipant(group, sender);
-    if (!isOwner(sender) && !isAdmin(senderParticipant)) {
+    if (!isOwner(sender, ctx) && !isAdmin(senderParticipant)) {
       await ctx.reply('Only group admins can use tagall.');
       return;
     }
