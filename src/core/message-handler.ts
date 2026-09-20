@@ -1,20 +1,20 @@
-import type { WASocket, WAMessage, WAMessageKey, WAMessageUpdate, proto } from '@whiskeysockets/baileys';
-import logger from './logger';
+import type { WAMessage, WAMessageKey, WAMessageUpdate, WASocket, proto } from '@whiskeysockets/baileys';
+import * as fs from 'fs';
+import * as path from 'path';
 import config from '../config';
-import { commandRegistry } from './command-registry';
-import { formatCommandHelp } from './command-help';
-import type { BotContext } from '../types';
-import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
 import {
+  readDeletedMessageMedia,
   recordDeletedMessageByKey,
   recordDeletedMessageFromProtocol,
   recordDeletedMessageFromUpdate,
   recordRecoverableMessage,
-  readDeletedMessageMedia,
   type DeletedMessageRecord,
 } from '../services/deleted-message-recovery';
-import * as fs from 'fs';
-import * as path from 'path';
+import { getSenderIdentity, recordAiMemoryMessage } from '../services/message-memory';
+import type { BotContext } from '../types';
+import { formatCommandHelp } from './command-help';
+import { commandRegistry } from './command-registry';
+import logger from './logger';
 
 const MAX_SEEN_MESSAGES = 5000;
 const seenMessages = new Set<string>();
@@ -225,7 +225,7 @@ export class MessageHandler {
         return;
       }
 
-      const savedViewOnce = await recordRecoverableMessage(message, sender, text, timestamp);
+      const savedViewOnce = await recordRecoverableMessage(message, sender, text, timestamp, this.socket);
       if (savedViewOnce && config.VIEW_ONCE_AUTO_FORWARD) {
         await this.forwardViewOnceToOwner(savedViewOnce);
       }

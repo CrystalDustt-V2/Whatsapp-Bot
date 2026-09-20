@@ -1,4 +1,4 @@
-import { downloadContentFromMessage, downloadMediaMessage, proto, type MediaType, type WAMessage, type WAMessageUpdate } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, proto, type MediaType, type WAMessage, type WAMessageUpdate, type WASocket } from '@whiskeysockets/baileys';
 import * as fs from 'fs';
 import * as path from 'path';
 import config from '../config';
@@ -384,64 +384,152 @@ async function storeMediaBuffer(
   };
 }
 
-async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState): Promise<RecoverableMediaRecord | undefined> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+// A view-once (or any) media message can arrive as a "stub": it carries the
+// mediaKey but no directPath/url, so downloadContentFromMessage throws
+// "No valid media URL or directPath present in message". Detect that state.
+export function isMediaStub(media: { mediaKey?: Uint8Array | null; directPath?: string | null; url?: string | null }): boolean {
+  const hasKey = Boolean(media.mediaKey && media.mediaKey.length > 0);
+  const hasPath = Boolean(media.directPath || media.url);
+  return hasKey && !hasPath;
+}
+
+// Baileys v6 has no fetchMessage. The way to recover a stubbed media payload is
+// the media-retry protocol: socket.updateMediaMessage() asks the server to
+// re-upload the media and patches directPath/url onto the message in place.
+// It waits on a messages.media-update event with no internal timeout, so we
+// guard it with our own timeout to avoid hanging the message pipeline.
+export async function triggerMediaRetry(socket: WASocket, message: WAMessage, timeoutMs = 15000): Promise<boolean> {
+  if (!message.key.remoteJid || !message.key.id) return false;
+
+  try {
+    await withTimeout(socket.updateMediaMessage(message as any), timeoutMs, 'media retry');
+    if (config.DELETED_MESSAGE_DEBUG) {
+      logger.info(
+        { messageId: message.key.id, chatJid: message.key.remoteJid },
+        'Media retry succeeded, directPath/url patched onto message'
+      );
+    }
+    return true;
+  } catch (err) {
+    if (config.DELETED_MESSAGE_DEBUG) {
+      logger.debug({ err: (err as Error)?.message, messageId: message.key.id }, 'Media retry did not complete');
+    }
+    return false;
+  }
+}
+
+async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState, socket?: WASocket): Promise<RecoverableMediaRecord | undefined> {
   if (!config.DELETED_MESSAGE_MEDIA_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return undefined;
 
   const found = recoverableMedia(message.message);
-  if (!found) {
-    const unwrapped = unwrapMessageInfo(message.message);
-    if (config.DELETED_MESSAGE_DEBUG && unwrapped.viewOnce) {
+  if (!found) return undefined;
+
+  const isViewOnceMedia = Boolean(found.viewOnce);
+  const maxDownloadAttempts = isViewOnceMedia && socket ? 3 : 1;
+
+  // View-once media frequently arrives as a stub: the mediaKey is present but
+  // there is no directPath/url, so the download throws. The media-retry
+  // protocol (socket.updateMediaMessage) asks the server to re-upload the
+  // media and patches directPath/url onto the message in place.
+  let retryArmed = true;
+  const tryMediaRetry = async (): Promise<void> => {
+    if (!retryArmed || !socket || !isMediaStub(found.media as any)) return;
+    retryArmed = false;
+    if (config.DELETED_MESSAGE_DEBUG) {
       logger.info(
-        {
-          messageId: message.key.id,
-          chatJid: message.key.remoteJid,
-          innerTypes: unwrapped.message ? Object.keys(unwrapped.message) : [],
-        },
-        'View-once message had no recoverable media payload'
+        { messageId: message.key.id, chatJid: message.key.remoteJid },
+        'View-once media arrived as stub, triggering media retry'
+      );
+    }
+    await triggerMediaRetry(socket, message);
+  };
+
+  await tryMediaRetry();
+
+  let buffer: Buffer | undefined;
+
+  for (let attempt = 1; attempt <= maxDownloadAttempts; attempt += 1) {
+    try {
+      const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const maxBytes = maxMediaBytes();
+
+      for await (const chunk of stream) {
+        const chunkBuf = Buffer.from(chunk);
+        size += chunkBuf.length;
+        if (size > maxBytes) {
+          logger.warn(
+            { messageId: message.key.id, mediaKind: found.kind, maxMb: config.DELETED_MESSAGE_MEDIA_MAX_MB },
+            'Skipping deleted-message media cache because file is too large'
+          );
+          return undefined;
+        }
+        chunks.push(chunkBuf);
+      }
+      buffer = Buffer.concat(chunks);
+    } catch (downloadErr: any) {
+      logger.warn(
+        { err: downloadErr?.message, messageId: message.key.id, mediaKind: found.kind, attempt },
+        'Primary stream download failed, attempting downloadMediaMessage fallback...'
+      );
+      try {
+        const normalizedMsg: WAMessage = {
+          ...message,
+          message: unwrapMessage(message.message) || message.message,
+        };
+        buffer = (await downloadMediaMessage(normalizedMsg, 'buffer', {})) as Buffer;
+      } catch (fallbackErr: any) {
+        logger.warn({ err: fallbackErr?.message, messageId: message.key.id, attempt }, 'Media download attempt failed');
+      }
+    }
+
+    if (buffer && buffer.length > 0) break;
+
+    // The download failed and the payload is still a stub (the server may have
+    // just finished re-uploading). Arm the media retry once more and retry.
+    if (attempt < maxDownloadAttempts && socket && isMediaStub(found.media as any)) {
+      if (config.DELETED_MESSAGE_DEBUG) {
+        logger.info(
+          { messageId: message.key.id, chatJid: message.key.remoteJid, attempt },
+          'View-once media still stubbed after download attempt, retrying media retry'
+        );
+      }
+      retryArmed = true;
+      await tryMediaRetry();
+      await sleep(1000);
+    }
+  }
+
+  if (!buffer || buffer.length === 0) {
+    if (isViewOnceMedia) {
+      logger.warn(
+        { messageId: message.key.id, chatJid: message.key.remoteJid },
+        'View-once media could not be downloaded after all attempts'
       );
     }
     return undefined;
   }
-
-  let buffer: Buffer | undefined;
-
-  try {
-    const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
-    const chunks: Buffer[] = [];
-    let size = 0;
-    const maxBytes = maxMediaBytes();
-
-    for await (const chunk of stream) {
-      const chunkBuf = Buffer.from(chunk);
-      size += chunkBuf.length;
-      if (size > maxBytes) {
-        logger.warn(
-          { messageId: message.key.id, mediaKind: found.kind, maxMb: config.DELETED_MESSAGE_MEDIA_MAX_MB },
-          'Skipping deleted-message media cache because file is too large'
-        );
-        return undefined;
-      }
-      chunks.push(chunkBuf);
-    }
-    buffer = Buffer.concat(chunks);
-  } catch (downloadErr: any) {
-    logger.warn(
-      { err: downloadErr?.message, messageId: message.key.id, mediaKind: found.kind },
-      'Primary stream download failed, attempting downloadMediaMessage fallback...'
-    );
-    try {
-      const normalizedMsg: WAMessage = {
-        ...message,
-        message: unwrapMessage(message.message) || message.message,
-      };
-      buffer = (await downloadMediaMessage(normalizedMsg, 'buffer', {})) as Buffer;
-    } catch (fallbackErr: any) {
-      logger.warn({ err: fallbackErr?.message, messageId: message.key.id }, 'All media download attempts failed');
-      return undefined;
-    }
-  }
-
-  if (!buffer || buffer.length === 0) return undefined;
 
   const mimetype = found.media.mimetype || '';
   const extension = extensionFromMedia(found.kind, mimetype);
@@ -496,7 +584,8 @@ export async function recordRecoverableMessage(
   message: WAMessage,
   sender: SenderIdentity,
   text: string,
-  timestampSeconds: number
+  timestampSeconds: number,
+  socket?: WASocket
 ): Promise<DeletedMessageRecord | undefined> {
   if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return undefined;
   if (message.message?.protocolMessage) return undefined;
@@ -512,7 +601,7 @@ export async function recordRecoverableMessage(
   const state = loadState();
   let media: RecoverableMediaRecord | undefined;
   try {
-    media = await downloadRecoverableMedia(message, state);
+    media = await downloadRecoverableMedia(message, state, socket);
   } catch (err) {
     logger.warn({ err, messageId: id, chatJid }, 'Could not cache recoverable media');
   }

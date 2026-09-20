@@ -1,20 +1,22 @@
-import { downloadContentFromMessage, downloadMediaMessage, type MediaType, proto } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, proto, type MediaType } from '@whiskeysockets/baileys';
 import config from '../../config';
 import logger from '../../core/logger';
 import {
-  cacheAndStoreMedia,
-  findStoredMessageById,
-  getAllViewOnceMessages,
-  listViewOnceMessages,
-  readDeletedMessageMedia,
-  type DeletedMessageRecord,
+    cacheAndStoreMedia,
+    findStoredMessageById,
+    getAllViewOnceMessages,
+    isMediaStub,
+    listViewOnceMessages,
+    readDeletedMessageMedia,
+    triggerMediaRetry,
+    type DeletedMessageRecord
 } from '../../services/deleted-message-recovery';
-import { Command, CommandCategory, type BotContext, type SenderIdentity } from '../../types';
+import { Command, CommandCategory, type SenderIdentity } from '../../types';
 import {
-  formatChatLabel,
-  formatRecord,
-  isOwnerOrSelf,
-  sendRecoveredMedia,
+    formatChatLabel,
+    formatRecord,
+    isOwnerOrSelf,
+    sendRecoveredMedia,
 } from './deleted';
 
 const PAGE_SIZE = 25;
@@ -181,6 +183,32 @@ export const ViewOnceCommand: Command = {
                 message: quotedMessage,
               };
               buffer = (await downloadMediaMessage(fakeMsg, 'buffer', {}).catch(() => undefined)) as Buffer | undefined;
+            }
+
+            // Quoted payloads often arrive as a stub: the mediaKey is present
+            // but there is no directPath/url, so the download throws. The
+            // media-retry protocol (socket.updateMediaMessage) asks the server
+            // to re-upload the media and patches directPath/url in place.
+            // extracted.media is a reference into quotedMessage, so the in-place
+            // patch propagates and a re-download from it succeeds.
+            if ((!buffer || buffer.length === 0) && quotedStanzaId && isMediaStub(extracted.media as any)) {
+              try {
+                const fakeMsg: any = {
+                  key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
+                  message: quotedMessage,
+                };
+                const retried = await triggerMediaRetry(ctx.socket, fakeMsg);
+                if (retried) {
+                  const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
+                  const chunks: Buffer[] = [];
+                  for await (const chunk of stream) {
+                    chunks.push(Buffer.from(chunk));
+                  }
+                  buffer = Buffer.concat(chunks);
+                }
+              } catch (retryErr) {
+                logger.warn({ err: retryErr, stanzaId: quotedStanzaId }, 'media retry for quoted view-once failed');
+              }
             }
 
             if (!buffer || buffer.length === 0) {
