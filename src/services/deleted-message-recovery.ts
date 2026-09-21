@@ -279,6 +279,14 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
     return inner;
   }
 
+  // Companion devices receive view-once media as a placeholderMessage stub.
+  // Unwrap it so downstream extraction sees the inner payload (if any).
+  const placeholder = (message as any).placeholderMessage?.message;
+  if (placeholder) {
+    const inner = unwrapMessageInfo(placeholder, depth + 1);
+    return { message: inner.message, viewOnce: true };
+  }
+
   const hasDirectViewOnce = Boolean(
     (message.imageMessage as any)?.viewOnce ||
     (message.videoMessage as any)?.viewOnce ||
@@ -286,7 +294,11 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
     (message.documentMessage as any)?.viewOnce
   );
 
-  return { message, viewOnce: hasDirectViewOnce };
+  // If the message has no recognizable media fields but does have a
+  // placeholderMessage at the top level, treat it as a view-once stub.
+  const hasPlaceholder = Boolean((message as any).placeholderMessage);
+
+  return { message, viewOnce: hasDirectViewOnce || hasPlaceholder };
 }
 
 function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
