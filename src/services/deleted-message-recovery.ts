@@ -533,7 +533,8 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
 
   const mimetype = found.media.mimetype || '';
   const extension = extensionFromMedia(found.kind, mimetype);
-  const fileName = `${safeFilePart(message.key.remoteJid || 'chat')}-${safeFilePart(message.key.id || Date.now().toString())}.${extension}`;
+  const suffix = require('crypto').randomBytes(4).toString('hex');
+  const fileName = `${safeFilePart(message.key.remoteJid || 'chat')}-${safeFilePart(message.key.id || Date.now().toString())}-${suffix}.${extension}`;
   const canStore = await pruneMediaForIncoming(state, buffer.length);
   if (!canStore) return undefined;
 
@@ -555,7 +556,12 @@ function displayText(text: string, type: string): string {
 }
 
 function timestampIso(timestampSeconds: number): string {
-  return timestampSeconds > 0 ? new Date(timestampSeconds * 1000).toISOString() : new Date().toISOString();
+  const ms = timestampSeconds > 0 ? timestampSeconds * 1000 : Date.now();
+  const d = new Date(ms);
+  // UTC+8 offset
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())}T${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}+08:00`;
 }
 
 function sameStoredMessage(message: RecoverableMessage, keyId: string): boolean {
@@ -618,10 +624,11 @@ export async function recordRecoverableMessage(
         mediaKind: media?.kind,
         mediaStorage: media?.storage,
         mediaSize: media?.size,
+        mediaPath: media?.path || undefined,
       },
       isViewOnce
-        ? 'Captured view-once media for deleted-media recovery'
-        : media
+        ? (media?.path ? 'Captured view-once media for deleted-media recovery' : 'View-once captured as metadata only (no media bytes)')
+        : media?.path
         ? 'Cached recoverable message media'
         : 'Cached recoverable message metadata'
     );
