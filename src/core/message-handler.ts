@@ -208,6 +208,18 @@ export class MessageHandler {
         return;
       }
 
+      if (isKeyViewOnce && !msg && typeof (this.socket as any).requestPlaceholderResend === 'function') {
+        try {
+          logger.info(
+            { remoteJid: message.key.remoteJid, messageId: message.key.id },
+            'View-once arrived as companion stub, requesting background PDO resend from primary phone'
+          );
+          await (this.socket as any).requestPlaceholderResend(message.key);
+        } catch (resendErr) {
+          logger.debug({ err: resendErr, messageId: message.key.id }, 'Placeholder resend request failed');
+        }
+      }
+
       const sender = getSenderIdentity(message, this.socket);
       const messageType = msg ? (Object.keys(msg)[0] || 'unknown') : (isKeyViewOnce ? 'viewOnce:unavailable' : 'unknown');
       const text = msg ? this.getMessageText(msg).trim() : '';
