@@ -21,7 +21,7 @@ type RecoverableMessage = {
 };
 
 type RecoverableMediaRecord = {
-  kind: 'audio' | 'video' | 'image';
+  kind: 'audio' | 'video' | 'image' | 'sticker';
   mimetype: string;
   extension: string;
   fileName: string;
@@ -334,8 +334,8 @@ function messageText(message: proto.IMessage | null | undefined, fallback = ''):
 }
 
 function recoverableMedia(message: proto.IMessage | null | undefined): {
-  kind: 'audio' | 'video' | 'image';
-  media: proto.Message.IAudioMessage | proto.Message.IVideoMessage | proto.Message.IImageMessage;
+  kind: 'audio' | 'video' | 'image' | 'sticker';
+  media: proto.Message.IAudioMessage | proto.Message.IVideoMessage | proto.Message.IImageMessage | proto.Message.IStickerMessage;
   viewOnce: boolean;
 } | null {
   const unwrapped = unwrapMessageInfo(message);
@@ -350,12 +350,14 @@ function recoverableMedia(message: proto.IMessage | null | undefined): {
   if (unwrapped.message.audioMessage) return { kind: 'audio', media: unwrapped.message.audioMessage, viewOnce: isVo };
   if (unwrapped.message.videoMessage) return { kind: 'video', media: unwrapped.message.videoMessage, viewOnce: isVo };
   if (unwrapped.message.imageMessage) return { kind: 'image', media: unwrapped.message.imageMessage, viewOnce: isVo };
+  if (unwrapped.message.stickerMessage) return { kind: 'sticker', media: unwrapped.message.stickerMessage, viewOnce: false };
   return null;
 }
 
-function extensionFromMedia(kind: 'audio' | 'video' | 'image', mimetype: string): string {
+function extensionFromMedia(kind: 'audio' | 'video' | 'image' | 'sticker', mimetype: string): string {
   const extension = mimetype.split('/')[1]?.split(';')[0]?.toLowerCase();
   if (extension) return extension === 'mpeg' ? 'mp3' : extension === 'quicktime' ? 'mov' : extension;
+  if (kind === 'sticker') return 'webp';
   if (kind === 'image') return 'jpg';
   return kind === 'audio' ? 'ogg' : 'mp4';
 }
@@ -550,9 +552,18 @@ async function downloadRecoverableMedia(message: WAMessage, state: RecoveryState
   const canStore = await pruneMediaForIncoming(state, buffer.length);
   if (!canStore) return undefined;
 
+  const defaultMimetype =
+    found.kind === 'audio'
+      ? 'audio/ogg'
+      : found.kind === 'video'
+      ? 'video/mp4'
+      : found.kind === 'sticker'
+      ? 'image/webp'
+      : 'image/jpeg';
+
   return storeMediaBuffer({
     kind: found.kind,
-    mimetype: mimetype || (found.kind === 'audio' ? 'audio/ogg' : found.kind === 'video' ? 'video/mp4' : 'image/jpeg'),
+    mimetype: mimetype || defaultMimetype,
     extension,
     fileName,
     size: buffer.length,
@@ -828,13 +839,17 @@ export async function readDeletedMessageMedia(record: {
           const directPath = path.join(mediaDir, match);
           const buf = fs.readFileSync(directPath);
           const ext = path.extname(match).slice(1).toLowerCase();
-          const kind: 'audio' | 'video' | 'image' = ['jpg', 'jpeg', 'png', 'webp'].includes(ext)
+          const kind: 'audio' | 'video' | 'image' | 'sticker' = ext === 'webp'
+            ? 'sticker'
+            : ['jpg', 'jpeg', 'png'].includes(ext)
             ? 'image'
             : ['mp3', 'ogg', 'opus', 'm4a', 'aac', 'wav'].includes(ext)
             ? 'audio'
             : 'video';
           const mimetype =
-            kind === 'image'
+            kind === 'sticker'
+              ? 'image/webp'
+              : kind === 'image'
               ? `image/${ext === 'jpg' ? 'jpeg' : ext}`
               : kind === 'audio'
               ? `audio/${ext}`
@@ -861,13 +876,17 @@ export async function readDeletedMessageMedia(record: {
         if (megaMatch) {
           const buf = await downloadMegaFile(megaMatch.nodeId);
           const ext = path.extname(megaMatch.name).slice(1).toLowerCase();
-          const kind: 'audio' | 'video' | 'image' = ['jpg', 'jpeg', 'png', 'webp'].includes(ext)
+          const kind: 'audio' | 'video' | 'image' | 'sticker' = ext === 'webp'
+            ? 'sticker'
+            : ['jpg', 'jpeg', 'png'].includes(ext)
             ? 'image'
             : ['mp3', 'ogg', 'opus', 'm4a', 'aac', 'wav'].includes(ext)
             ? 'audio'
             : 'video';
           const mimetype =
-            kind === 'image'
+            kind === 'sticker'
+              ? 'image/webp'
+              : kind === 'image'
               ? `image/${ext === 'jpg' ? 'jpeg' : ext}`
               : kind === 'audio'
               ? `audio/${ext}`
@@ -923,7 +942,7 @@ export async function cacheAndStoreMedia(
   id: string,
   sender: SenderIdentity,
   buffer: Buffer,
-  kind: 'image' | 'video' | 'audio',
+  kind: 'image' | 'video' | 'audio' | 'sticker',
   mimetype: string,
   caption = '',
   viewOnce = true,

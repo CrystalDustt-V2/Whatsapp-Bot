@@ -172,6 +172,12 @@ export class MessageHandler {
           mimetype: record.media.mimetype || 'audio/ogg',
           ptt: record.media.ptt ?? false,
         });
+      } else if (record.media.kind === 'sticker') {
+        await this.socket.sendMessage(targetJid, { text: caption.trim() });
+        await this.socket.sendMessage(targetJid, {
+          sticker: buffer,
+          mimetype: record.media.mimetype || 'image/webp',
+        });
       }
     } catch (err) {
       logger.warn({ err, messageId: record.messageId }, 'Could not auto-forward view-once media to owner');

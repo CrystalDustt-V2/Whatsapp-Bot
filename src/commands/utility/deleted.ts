@@ -130,6 +130,15 @@ export async function sendRecoveredMedia(
     return;
   }
 
+  if (record.media.kind === 'sticker') {
+    await ctx.reply(formattedText);
+    await ctx.socket.sendMessage(targetJid, {
+      sticker: buffer,
+      mimetype: record.media.mimetype || 'image/webp',
+    });
+    return;
+  }
+
   // Audio / voice note
   await ctx.reply(formattedText);
   await ctx.socket.sendMessage(targetJid, {
