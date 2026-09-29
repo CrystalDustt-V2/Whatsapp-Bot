@@ -73,6 +73,16 @@ export interface DashboardChatMessage {
   };
 }
 
+export interface ScheduledMessage {
+  id: string;
+  chatJid: string;
+  text: string;
+  sendAt: string;
+  mentionAll?: boolean;
+  quotedMessageId?: string;
+  createdAt: string;
+}
+
 let botSocket: WASocket | null = null;
 
 export class ApiServer {
@@ -92,6 +102,10 @@ export class ApiServer {
   // Raw WAMessage cache for authentic quoted replies
   private rawMessageMap = new Map<string, WAMessage>();
 
+  // Scheduled messages queue
+  private scheduledMessages: ScheduledMessage[] = [];
+  private scheduledTimer: NodeJS.Timeout | null = null;
+
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
     this.app = express();
@@ -106,6 +120,7 @@ export class ApiServer {
     this.setupMiddleware();
     this.setupRoutes();
     this.setupSocketIO();
+    this.scheduledTimer = setInterval(() => this.processScheduledMessages(), 5000);
   }
 
   // ---------------------------------------------------------------------------
@@ -789,6 +804,16 @@ export class ApiServer {
         let note = '';
         let bypassed = false;
 
+        let mentions: string[] | undefined = undefined;
+        if (isGroup && (req.body?.mentionAll || /\b@(everyone|all)\b/i.test(text))) {
+          try {
+            const meta = await botSocket.groupMetadata(jid);
+            mentions = meta.participants?.map((p) => p.id);
+          } catch (mErr) {
+            logger.debug({ mErr, jid }, 'Failed to fetch participants for mentionAll');
+          }
+        }
+
         if (isGroup) {
           try {
             const meta = await botSocket.groupMetadata(jid);
@@ -817,7 +842,7 @@ export class ApiServer {
               try {
                 const sent = await botSocket.sendMessage(
                   jid,
-                  { text: text.trim() },
+                  { text: text.trim(), mentions },
                   rawQuoted ? { quoted: rawQuoted } : undefined
                 );
                 if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -839,7 +864,7 @@ export class ApiServer {
                   await botSocket.groupSettingUpdate(jid, 'not_announcement');
                   const sent = await botSocket.sendMessage(
                     jid,
-                    { text: text.trim() },
+                    { text: text.trim(), mentions },
                     rawQuoted ? { quoted: rawQuoted } : undefined
                   );
                   await botSocket.groupSettingUpdate(jid, 'announcement');
@@ -852,7 +877,7 @@ export class ApiServer {
                 } catch (toggleErr) {
                   const sent = await botSocket.sendMessage(
                     jid,
-                    { text: text.trim() },
+                    { text: text.trim(), mentions },
                     rawQuoted ? { quoted: rawQuoted } : undefined
                   );
                   if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -863,7 +888,7 @@ export class ApiServer {
               } else {
                 const sent = await botSocket.sendMessage(
                   jid,
-                  { text: text.trim() },
+                  { text: text.trim(), mentions },
                   rawQuoted ? { quoted: rawQuoted } : undefined
                 );
                 if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -879,7 +904,7 @@ export class ApiServer {
 
         const sent = await botSocket.sendMessage(
           jid,
-          { text: text.trim() },
+          { text: text.trim(), mentions },
           rawQuoted ? { quoted: rawQuoted } : undefined
         );
         if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -1614,6 +1639,199 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
+    // CHAT ANALYTICS & LURKER DETECTOR
+    // -------------------------------------------------------------------------
+    this.app.get('/api/chats/:jid/analytics', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        const live = this.liveMessageStore.get(jid) || [];
+        const isGroup = jid.endsWith('@g.us');
+
+        const typeBreakdown: Record<string, number> = {};
+        const senderCounts = new Map<string, { count: number; name: string; number: string; lastSeen: string }>();
+        const hourly = new Array(24).fill(0);
+
+        for (const msg of live) {
+          typeBreakdown[msg.type] = (typeBreakdown[msg.type] || 0) + 1;
+
+          const senderId = msg.senderJid || msg.senderNumber || 'Unknown';
+          const cur = senderCounts.get(senderId) || {
+            count: 0,
+            name: msg.senderName || msg.senderNumber || (msg.fromMe ? 'Bot' : 'User'),
+            number: msg.senderNumber || senderId.split('@')[0],
+            lastSeen: msg.timestamp,
+          };
+          cur.count++;
+          if (new Date(msg.timestamp) > new Date(cur.lastSeen)) {
+            cur.lastSeen = msg.timestamp;
+          }
+          senderCounts.set(senderId, cur);
+
+          if (msg.timestamp) {
+            const hour = new Date(msg.timestamp).getHours();
+            if (hour >= 0 && hour < 24) {
+              hourly[hour]++;
+            }
+          }
+        }
+
+        const sortedSenders = Array.from(senderCounts.entries())
+          .map(([jidKey, data]) => ({
+            jid: jidKey,
+            ...data,
+            percentage: live.length ? Math.round((data.count / live.length) * 100) : 0,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        let lurkers: Array<{ id: string; phoneNumber: string }> = [];
+        let participantsCount = 0;
+
+        if (isGroup) {
+          try {
+            const metadata = await botSocket.groupMetadata(jid);
+            participantsCount = metadata.participants.length;
+            const activeJids = new Set(Array.from(senderCounts.keys()).map((k) => k.split('@')[0]));
+
+            lurkers = metadata.participants
+              .filter((p) => !activeJids.has(p.id.split('@')[0]))
+              .map((p) => ({
+                id: p.id,
+                phoneNumber: p.id.split('@')[0],
+              }));
+          } catch (mErr) {
+            logger.debug({ mErr }, 'Could not fetch metadata for lurker analysis');
+          }
+        }
+
+        res.json({
+          success: true,
+          analytics: {
+            chatJid: jid,
+            isGroup,
+            totalRecorded: live.length,
+            participantsCount,
+            typeBreakdown,
+            hourlyActivity: hourly,
+            topSenders: sortedSenders.slice(0, 10),
+            lurkersCount: lurkers.length,
+            lurkers: lurkers.slice(0, 50),
+          },
+        });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to compute chat analytics.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SCHEDULED MESSAGES (SCHEDULE, LIST, CANCEL)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/schedule', this.requireDashboardAuth.bind(this), (req, res) => {
+      const { jid, text, sendAt, mentionAll, quotedMessageId } = req.body || {};
+      if (!jid || !text || !sendAt) {
+        res.status(400).json({ success: false, error: 'jid, text, and sendAt timestamp are required.' });
+        return;
+      }
+
+      const targetTime = new Date(sendAt).getTime();
+      if (isNaN(targetTime) || targetTime <= Date.now()) {
+        res.status(400).json({ success: false, error: 'sendAt must be a valid future ISO date/time.' });
+        return;
+      }
+
+      const newItem: ScheduledMessage = {
+        id: `sched-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        chatJid: jid,
+        text: String(text).trim(),
+        sendAt: new Date(targetTime).toISOString(),
+        mentionAll: Boolean(mentionAll),
+        quotedMessageId: quotedMessageId || undefined,
+        createdAt: new Date().toISOString(),
+      };
+
+      this.scheduledMessages.push(newItem);
+      this.io.to('auth').emit('chat:scheduled-update', this.scheduledMessages);
+
+      res.json({ success: true, item: newItem });
+    });
+
+    this.app.get('/api/chats/scheduled', this.requireDashboardAuth.bind(this), (req, res) => {
+      const jid = req.query.jid ? String(req.query.jid) : null;
+      const list = jid ? this.scheduledMessages.filter((m) => m.chatJid === jid) : this.scheduledMessages;
+      res.json({ success: true, scheduled: list });
+    });
+
+    this.app.delete('/api/chats/scheduled/:id', this.requireDashboardAuth.bind(this), (req, res) => {
+      const id = String(req.params.id);
+      const prevLen = this.scheduledMessages.length;
+      this.scheduledMessages = this.scheduledMessages.filter((m) => m.id !== id);
+      const removed = this.scheduledMessages.length < prevLen;
+      if (removed) {
+        this.io.to('auth').emit('chat:scheduled-update', this.scheduledMessages);
+      }
+      res.json({ success: true, removed });
+    });
+
+    // -------------------------------------------------------------------------
+    // BATCH FORWARD TO MULTIPLE CHATS (BYPASSING 5-FORWARD LIMIT)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/forward-batch', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { messageId, sourceJid, targetJids } = req.body || {};
+      if (!messageId || !Array.isArray(targetJids) || !targetJids.length) {
+        res.status(400).json({ success: false, error: 'messageId and targetJids array are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        const rawMsg = this.rawMessageMap.get(messageId);
+        const storedMsg = (this.liveMessageStore.get(sourceJid) || []).find((m) => m.id === messageId);
+
+        const successfulTargets: string[] = [];
+        const failedTargets: string[] = [];
+
+        for (const targetJid of targetJids) {
+          try {
+            if (rawMsg) {
+              const sent = await botSocket.sendMessage(targetJid, { forward: rawMsg });
+              if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+              this.recordOutgoingChatMessage(
+                targetJid,
+                sent?.key.id || undefined,
+                storedMsg?.text || '[Forwarded Message]',
+                storedMsg?.type || 'conversation'
+              );
+            } else if (storedMsg) {
+              const sent = await botSocket.sendMessage(targetJid, { text: storedMsg.text || '[Forwarded Message]' });
+              if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+              this.recordOutgoingChatMessage(targetJid, sent?.key.id || undefined, storedMsg.text || '', 'conversation');
+            }
+            successfulTargets.push(targetJid);
+          } catch (fErr) {
+            failedTargets.push(targetJid);
+          }
+        }
+
+        res.json({
+          success: true,
+          forwardedCount: successfulTargets.length,
+          successfulTargets,
+          failedTargets,
+        });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Batch forward failed.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
     // MULTI-COMMAND BATCH RUNNER
     // -------------------------------------------------------------------------
     this.app.post('/api/commands/execute', this.requireDashboardAuth.bind(this), async (req, res) => {
@@ -1985,6 +2203,40 @@ export class ApiServer {
     });
   }
 
+  private async processScheduledMessages(): Promise<void> {
+    if (!botSocket || !this.scheduledMessages.length) return;
+    const now = Date.now();
+    const due = this.scheduledMessages.filter((m) => new Date(m.sendAt).getTime() <= now);
+    if (!due.length) return;
+
+    this.scheduledMessages = this.scheduledMessages.filter((m) => new Date(m.sendAt).getTime() > now);
+
+    for (const item of due) {
+      try {
+        let mentions: string[] | undefined = undefined;
+        if (item.chatJid.endsWith('@g.us') && (item.mentionAll || /\b@(everyone|all)\b/i.test(item.text))) {
+          try {
+            const meta = await botSocket.groupMetadata(item.chatJid);
+            mentions = meta.participants?.map((p) => p.id);
+          } catch {}
+        }
+
+        const rawQuoted = item.quotedMessageId ? this.rawMessageMap.get(item.quotedMessageId) : undefined;
+        const sent = await botSocket.sendMessage(
+          item.chatJid,
+          { text: item.text, mentions },
+          rawQuoted ? { quoted: rawQuoted } : undefined
+        );
+        if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+        this.recordOutgoingChatMessage(item.chatJid, sent?.key.id || undefined, item.text, 'conversation');
+      } catch (err) {
+        logger.error({ err, item }, 'Failed to dispatch scheduled message');
+      }
+    }
+
+    this.io.to('auth').emit('chat:scheduled-update', this.scheduledMessages);
+  }
+
   start() {
     this.server.listen(this.port, () => {
       logger.info(`API server started on http://localhost:${this.port}`);
@@ -1992,6 +2244,10 @@ export class ApiServer {
   }
 
   stop() {
+    if (this.scheduledTimer) {
+      clearInterval(this.scheduledTimer);
+      this.scheduledTimer = null;
+    }
     this.server.close();
     this.io.close();
   }

@@ -784,6 +784,63 @@
       background: rgba(255, 255, 255, 0.03);
     }
 
+    /* Advanced Capabilities Styling */
+    .stat-metric-card {
+      background: #06090e;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      flex: 1;
+      min-width: 120px;
+    }
+    .stat-metric-val {
+      font-size: 20px;
+      font-weight: 800;
+      color: #38bdf8;
+      font-family: var(--font-mono);
+    }
+    .stat-metric-label {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .macro-card {
+      background: var(--card-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .scheduled-item-card {
+      background: var(--card-surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid #38bdf8;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .forward-chat-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .forward-chat-row:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+
     /* Composer & Action Bar */
     .chat-view-composer {
       padding: 12px 18px;
@@ -1141,6 +1198,7 @@
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;" id="current-chat-controls">
                 <input type="text" id="chat-search-messages" placeholder="🔍 Search in chat..." oninput="filterChatMessages(this.value)" style="width:125px;padding:4px 8px;font-size:11.5px;background:#151d2c;border:1px solid var(--border);border-radius:8px;color:var(--text);">
                 <button class="btn btn-secondary" id="btn-group-info" style="display:none;padding:5px 9px;font-size:12px;" onclick="openGroupInfoModal()" title="View Group Details & Admin Settings">👥 Info</button>
+                <button class="btn btn-secondary" id="btn-view-scheduled" style="padding:5px 8px;font-size:12px;display:inline-flex;align-items:center;gap:4px;" onclick="openScheduledModal()" title="View & manage scheduled messages">⏰ <span id="badge-scheduled-count" style="display:none;background:#38bdf8;color:#000;border-radius:10px;padding:0 5px;font-size:10px;font-weight:700;">0</span></button>
                 <select id="chat-presence-select" onchange="changeChatPresence(this.value)" style="background:#151d2c;border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:8px;font-size:12px;cursor:pointer;">
                   <option value="">Presence: Normal</option>
                   <option value="composing">💬 Typing...</option>
@@ -1208,6 +1266,12 @@
                   <button class="icon-action-btn" type="button" onclick="openPollModal()" title="Create WhatsApp Poll">
                     <span>📊</span> Poll
                   </button>
+                  <button class="icon-action-btn" type="button" onclick="openScheduleModal()" title="Schedule message for future dispatch">
+                    <span>⏰</span> Schedule
+                  </button>
+                  <button class="icon-action-btn" type="button" onclick="openQuickRepliesModal()" title="Saved quick replies & templates">
+                    <span>⚡</span> Macros
+                  </button>
                 </div>
 
                 <!-- Voice Recording Indicator -->
@@ -1219,8 +1283,12 @@
                   <button class="icon-action-btn" style="color:#34d399;padding:2px 7px;font-size:11px;" onclick="stopVoiceRecording(true)">📤 Send</button>
                 </div>
 
-                <!-- Admin & Queue Toggles -->
-                <div style="display:flex;align-items:center;gap:12px;">
+                <!-- Admin, Queue & Mention Toggles -->
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <label id="mention-all-wrapper" class="bypass-toggle" style="display:none;background:#2d1537;border-color:rgba(217,70,239,0.3);color:#f472b6;" title="Ping every group member in message stanza">
+                    <input type="checkbox" id="mention-all-check">
+                    <span>📢 @everyone</span>
+                  </label>
                   <label id="bypass-wrapper" class="bypass-toggle" style="display:none;" title="Temporarily un-announce group, dispatch message, and re-lock">
                     <input type="checkbox" id="bypass-admin-check">
                     <span>⚡ Admin Bypass</span>
@@ -1617,70 +1685,116 @@
       </div>
 
       <!-- Quick Stats & Badges -->
-      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
         <span id="ginfo-badge-members" class="tag-pill tag-admin-only" style="background:#1e293b;color:#38bdf8;padding:4px 8px;">0 Members</span>
         <span id="ginfo-badge-role" class="tag-pill tag-bot-admin" style="padding:4px 8px;">Member</span>
         <span id="ginfo-badge-announce" class="tag-pill tag-admin-only" style="display:none;padding:4px 8px;">Admin Only Messages</span>
       </div>
 
-      <!-- Subject & Description Editors -->
-      <div style="background:#06090e;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;">
-        <div style="margin-bottom:10px;">
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Group Subject / Name:</label>
+      <!-- Group Modal Tab Selector -->
+      <div style="display:flex;gap:8px;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:14px;">
+        <button id="tab-btn-ginfo-settings" class="btn btn-secondary" style="font-size:12px;padding:5px 12px;background:#1e293b;color:#38bdf8;" onclick="switchGroupInfoTab('settings')">⚙️ Settings & Members</button>
+        <button id="tab-btn-ginfo-analytics" class="btn btn-secondary" style="font-size:12px;padding:5px 12px;" onclick="switchGroupInfoTab('analytics')">📊 Activity & Lurker Insights</button>
+      </div>
+
+      <!-- Tab View 1: Settings & Members -->
+      <div id="ginfo-view-settings">
+        <!-- Subject & Description Editors -->
+        <div style="background:#06090e;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;">
+          <div style="margin-bottom:10px;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Group Subject / Name:</label>
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="ginfo-edit-subject" placeholder="Group name..." style="flex:1;">
+              <button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="updateGroupSubject()">Rename</button>
+            </div>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Group Description:</label>
+            <textarea id="ginfo-edit-desc" rows="2" placeholder="Group description..."></textarea>
+            <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+              <button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="updateGroupDescription()">Update Description</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Admin Settings Toggles & Invite Link -->
+        <div id="ginfo-admin-controls" style="background:#06090e;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;">
+          <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:10px;">Group Settings & Access</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <button class="btn btn-secondary" id="btn-toggle-announce" onclick="toggleGroupAnnouncement()" style="justify-content:center;font-size:12px;">
+              🔒 Toggle Admin-Only Mode
+            </button>
+            <button class="btn btn-secondary" id="btn-toggle-locked" onclick="toggleGroupLocked()" style="justify-content:center;font-size:12px;">
+              ⚙️ Toggle Edit Info Mode
+            </button>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card-surface);padding:8px 12px;border-radius:8px;border:1px solid var(--border);">
+            <div style="min-width:0;flex:1;">
+              <div style="font-size:11px;color:var(--text-dim);">Invite Link:</div>
+              <div id="ginfo-invite-link" style="font-size:12px;color:#38bdf8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">--</div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="copyGroupInviteLink()">Copy</button>
+              <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;color:#fb7185;" onclick="revokeGroupInviteLink()">Revoke</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Participant Form -->
+        <div id="ginfo-add-participant-box" style="margin-bottom:16px;">
+          <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Add Participant (Phone Number or JID):</label>
           <div style="display:flex;gap:8px;">
-            <input type="text" id="ginfo-edit-subject" placeholder="Group name..." style="flex:1;">
-            <button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="updateGroupSubject()">Rename</button>
+            <input type="text" id="ginfo-new-participant" placeholder="e.g. 15551234567" style="flex:1;font-family:var(--font-mono);">
+            <button class="btn btn-emerald" style="padding:6px 14px;font-size:12px;" onclick="addGroupParticipant()">+ Add</button>
           </div>
         </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Group Description:</label>
-          <textarea id="ginfo-edit-desc" rows="2" placeholder="Group description..."></textarea>
-          <div style="display:flex;justify-content:flex-end;margin-top:6px;">
-            <button class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="updateGroupDescription()">Update Description</button>
+
+        <!-- Participants List -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-weight:700;font-size:13px;color:var(--text);">Participants</span>
+            <input type="text" id="ginfo-search-members" placeholder="Filter members..." oninput="filterGroupMembers(this.value)" style="width:140px;padding:3px 8px;font-size:11.5px;background:#151d2c;border:1px solid var(--border);border-radius:6px;color:var(--text);">
+          </div>
+          <div id="ginfo-participants-list" style="max-height:220px;overflow-y:auto;background:var(--card-surface);border:1px solid var(--border);border-radius:10px;">
+            <!-- Loaded dynamically -->
           </div>
         </div>
       </div>
 
-      <!-- Admin Settings Toggles & Invite Link -->
-      <div id="ginfo-admin-controls" style="background:#06090e;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;">
-        <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:10px;">Group Settings & Access</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-          <button class="btn btn-secondary" id="btn-toggle-announce" onclick="toggleGroupAnnouncement()" style="justify-content:center;font-size:12px;">
-            🔒 Toggle Admin-Only Mode
-          </button>
-          <button class="btn btn-secondary" id="btn-toggle-locked" onclick="toggleGroupLocked()" style="justify-content:center;font-size:12px;">
-            ⚙️ Toggle Edit Info Mode
-          </button>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card-surface);padding:8px 12px;border-radius:8px;border:1px solid var(--border);">
-          <div style="min-width:0;flex:1;">
-            <div style="font-size:11px;color:var(--text-dim);">Invite Link:</div>
-            <div id="ginfo-invite-link" style="font-size:12px;color:#38bdf8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">--</div>
+      <!-- Tab View 2: Analytics & Lurkers -->
+      <div id="ginfo-view-analytics" style="display:none;">
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <div class="stat-metric-card">
+            <div class="stat-metric-val" id="ga-total-msgs">0</div>
+            <div class="stat-metric-label">Recorded Messages</div>
           </div>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="copyGroupInviteLink()">Copy</button>
-            <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;color:#fb7185;" onclick="revokeGroupInviteLink()">Revoke</button>
+          <div class="stat-metric-card">
+            <div class="stat-metric-val" id="ga-active-talkers">0</div>
+            <div class="stat-metric-label">Active Members</div>
+          </div>
+          <div class="stat-metric-card">
+            <div class="stat-metric-val" id="ga-lurkers-count" style="color:#fb7185;">0</div>
+            <div class="stat-metric-label">Silent Lurkers</div>
           </div>
         </div>
-      </div>
 
-      <!-- Add Participant Form -->
-      <div id="ginfo-add-participant-box" style="margin-bottom:16px;">
-        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Add Participant (Phone Number or JID):</label>
-        <div style="display:flex;gap:8px;">
-          <input type="text" id="ginfo-new-participant" placeholder="e.g. 15551234567" style="flex:1;font-family:var(--font-mono);">
-          <button class="btn btn-emerald" style="padding:6px 14px;font-size:12px;" onclick="addGroupParticipant()">+ Add</button>
+        <!-- Top Chatters Leaderboard -->
+        <div style="margin-bottom:16px;">
+          <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:8px;">🏆 Top Chatters Leaderboard</div>
+          <div id="ga-top-senders-list" style="background:var(--card-surface);border:1px solid var(--border);border-radius:8px;padding:6px;max-height:160px;overflow-y:auto;">
+            <!-- Rendered dynamically -->
+          </div>
         </div>
-      </div>
 
-      <!-- Participants List -->
-      <div style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <span style="font-weight:700;font-size:13px;color:var(--text);">Participants</span>
-          <input type="text" id="ginfo-search-members" placeholder="Filter members..." oninput="filterGroupMembers(this.value)" style="width:140px;padding:3px 8px;font-size:11.5px;background:#151d2c;border:1px solid var(--border);border-radius:6px;color:var(--text);">
-        </div>
-        <div id="ginfo-participants-list" style="max-height:220px;overflow-y:auto;background:var(--card-surface);border:1px solid var(--border);border-radius:10px;">
-          <!-- Loaded dynamically -->
+        <!-- Lurkers Detector List -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="font-weight:700;font-size:13px;color:var(--text);">👻 Inactive Lurkers (0 Messages in History)</div>
+            <button class="btn btn-secondary" style="padding:2px 8px;font-size:11px;" onclick="copyLurkerNumbers()">📋 Copy Lurkers</button>
+          </div>
+          <div id="ga-lurkers-list" style="background:var(--card-surface);border:1px solid var(--border);border-radius:8px;padding:6px;max-height:160px;overflow-y:auto;">
+            <!-- Rendered dynamically -->
+          </div>
         </div>
       </div>
 
@@ -1689,6 +1803,130 @@
           🚪 Leave Group
         </button>
         <button class="btn btn-secondary" onclick="closeModal('modal-group-info')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Schedule Message -->
+  <div id="modal-schedule-msg" class="modal-overlay">
+    <div class="modal-card" style="width:min(480px, 95vw);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">⏰ Schedule Message</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-schedule-msg')">&times;</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Target Conversation:</label>
+        <div id="schedule-target-title" style="font-weight:700;color:#38bdf8;font-size:13.5px;margin-bottom:2px;">Selected Chat</div>
+        <div id="schedule-target-jid" style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);"></div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Message Text:</label>
+        <textarea id="schedule-msg-text" rows="3" placeholder="Message content to dispatch..."></textarea>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Dispatch Date & Time:</label>
+        <input type="datetime-local" id="schedule-datetime-input" style="font-family:var(--font-mono);width:100%;">
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="setSchedulePreset(15)">+15 min</button>
+        <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="setSchedulePreset(60)">+1 hour</button>
+        <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="setSchedulePreset(180)">+3 hours</button>
+        <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="setSchedulePreset('tomorrow-9')">Tomorrow 9:00 AM</button>
+      </div>
+      <div style="margin-bottom:18px;" id="schedule-mention-wrapper">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#f472b6;cursor:pointer;">
+          <input type="checkbox" id="schedule-mention-check">
+          <span>📢 Mention All Participants (@everyone) upon dispatch</span>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-schedule-msg')">Cancel</button>
+        <button class="btn btn-emerald" id="btn-submit-schedule" onclick="submitScheduleMessage()">Confirm Schedule &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Scheduled Messages List -->
+  <div id="modal-scheduled-list" class="modal-overlay">
+    <div class="modal-card" style="width:min(580px, 95vw);max-height:85vh;overflow-y:auto;text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px;">
+        <h3 style="font-size:18px;margin:0;">⏰ Active Scheduled Messages</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-scheduled-list')">&times;</button>
+      </div>
+      <div id="scheduled-items-container" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        <!-- Dynamically rendered -->
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-scheduled-list')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Batch Forward Message -->
+  <div id="modal-forward-msg" class="modal-overlay">
+    <div class="modal-card" style="width:min(540px, 95vw);max-height:85vh;overflow-y:auto;text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px;">
+        <div>
+          <h3 style="font-size:18px;margin:0;">↗️ Batch Forward Message</h3>
+          <div style="font-size:11.5px;color:var(--text-dim);">Forward to unlimited groups & chats (no 5-chat limit)</div>
+        </div>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-forward-msg')">&times;</button>
+      </div>
+      <!-- Snippet preview -->
+      <div style="background:#06090e;border:1px solid var(--border);border-left:3px solid #38bdf8;border-radius:6px;padding:8px 12px;margin-bottom:12px;">
+        <div style="font-size:11px;color:#38bdf8;font-weight:700;" id="forward-preview-sender">Sender</div>
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="forward-preview-text">...</div>
+      </div>
+      <!-- Selection filters -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;">
+        <input type="text" id="forward-search-input" placeholder="Filter target chats..." oninput="filterForwardChats(this.value)" style="flex:1;padding:4px 8px;font-size:12px;background:#151d2c;border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="selectAllForward(true, 'groups')">All Groups</button>
+          <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="selectAllForward(false)">Clear</button>
+        </div>
+      </div>
+      <!-- Target chats list -->
+      <div id="forward-targets-list" style="max-height:220px;overflow-y:auto;background:var(--card-surface);border:1px solid var(--border);border-radius:8px;padding:6px;margin-bottom:14px;">
+        <!-- Checkbox rows rendered here -->
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:12px;">
+        <span style="font-size:12px;color:var(--text-dim);" id="forward-selected-count">0 chats selected</span>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-secondary" onclick="closeModal('modal-forward-msg')">Cancel</button>
+          <button class="btn btn-emerald" id="btn-submit-forward" onclick="submitBatchForward()">Forward Now &rarr;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Quick Replies & Macros -->
+  <div id="modal-quick-replies" class="modal-overlay">
+    <div class="modal-card" style="width:min(560px, 95vw);max-height:85vh;overflow-y:auto;text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px;">
+        <div>
+          <h3 style="font-size:18px;margin:0;">⚡ Quick Replies & Macros</h3>
+          <div style="font-size:11.5px;color:var(--text-dim);">One-click message templates & shortcuts</div>
+        </div>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-quick-replies')">&times;</button>
+      </div>
+      <!-- Saved Macros list -->
+      <div id="quick-replies-list" style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        <!-- Loaded dynamically -->
+      </div>
+      <!-- Create New Macro Form -->
+      <div style="background:#06090e;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--text);">+ Create New Quick Reply</div>
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:8px;">
+          <input type="text" id="macro-keyword-input" placeholder="Shortcut (e.g. /rules)" style="font-family:var(--font-mono);">
+          <input type="text" id="macro-title-input" placeholder="Title (e.g. Group Rules)">
+        </div>
+        <textarea id="macro-content-input" rows="2" placeholder="Template message text..."></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="saveNewQuickReply()">Save Macro</button>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-quick-replies')">Close</button>
       </div>
     </div>
   </div>
@@ -2029,6 +2267,13 @@
         btnGroupInfo.style.display = selectedChat.isGroup ? 'inline-flex' : 'none';
       }
 
+      const mentionAllWrapper = document.getElementById('mention-all-wrapper');
+      if (mentionAllWrapper) {
+        mentionAllWrapper.style.display = selectedChat.isGroup ? 'flex' : 'none';
+        const mentionCheck = document.getElementById('mention-all-check');
+        if (mentionCheck) mentionCheck.checked = false;
+      }
+
       cancelReplyQuote();
       const searchEl = document.getElementById('chat-search-messages');
       if (searchEl) {
@@ -2264,13 +2509,27 @@
             <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😢', '${msg.senderJid || ''}', ${isOut})" title="Sad">😢</button>
             <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '🙏', '${msg.senderJid || ''}', ${isOut})" title="Pray">🙏</button>
             ${replyBtn}
+            <button class="action-emoji-btn" onclick="openForwardModal('${escapeHtml(msg.id)}')" title="Batch forward to multiple chats">↗️</button>
             ${revokeBtn}
           </div>
           <div class="chat-bubble">
             ${!isOut && selectedChat && selectedChat.isGroup ? `<div class="bubble-sender"><span>${escapeHtml(senderDisplay)}</span></div>` : ''}
             ${badgesHtml ? `<div class="bubble-badges">${badgesHtml}</div>` : ''}
+            ${msg.isDeleted ? `
+              <div style="display:flex;align-items:center;gap:6px;background:rgba(244,63,94,0.18);border:1px solid rgba(244,63,94,0.4);border-radius:6px;padding:4px 8px;margin-bottom:6px;font-size:11px;color:#fb7185;font-weight:700;">
+                <span>⚠️ Intercepted Deleted Message</span>
+                <span style="font-weight:400;color:var(--text-dim);font-size:10px;">(Revoked on WhatsApp)</span>
+              </div>
+            ` : ''}
             ${quotedHtml}
             ${mediaHtml}
+            ${msg.isViewOnce && msg.media && msg.media.url ? `
+              <div style="margin-top:4px;">
+                <a href="${msg.media.url}" download="${escapeHtml(msg.media.fileName || 'view-once-media')}" target="_blank" style="font-size:11px;color:#34d399;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+                  <span>💾 Save View-Once Media</span>
+                </a>
+              </div>
+            ` : ''}
             ${locationHtml}
             ${contactHtml}
             ${pollHtml}
@@ -2541,6 +2800,7 @@
         return;
       }
       openModal('modal-group-info');
+      switchGroupInfoTab('settings');
       loadGroupInfo();
     }
 
@@ -2878,6 +3138,522 @@
       }
     }
 
+    // --- Group Analytics & Lurkers ---
+    let groupAnalyticsCache = null;
+
+    function switchGroupInfoTab(tab) {
+      const viewSettings = document.getElementById('ginfo-view-settings');
+      const viewAnalytics = document.getElementById('ginfo-view-analytics');
+      const btnSettings = document.getElementById('tab-btn-ginfo-settings');
+      const btnAnalytics = document.getElementById('tab-btn-ginfo-analytics');
+
+      if (tab === 'analytics') {
+        if (viewSettings) viewSettings.style.display = 'none';
+        if (viewAnalytics) viewAnalytics.style.display = 'block';
+        if (btnSettings) {
+          btnSettings.style.background = '';
+          btnSettings.style.color = '';
+        }
+        if (btnAnalytics) {
+          btnAnalytics.style.background = '#1e293b';
+          btnAnalytics.style.color = '#38bdf8';
+        }
+        loadGroupAnalytics();
+      } else {
+        if (viewSettings) viewSettings.style.display = 'block';
+        if (viewAnalytics) viewAnalytics.style.display = 'none';
+        if (btnSettings) {
+          btnSettings.style.background = '#1e293b';
+          btnSettings.style.color = '#38bdf8';
+        }
+        if (btnAnalytics) {
+          btnAnalytics.style.background = '';
+          btnAnalytics.style.color = '';
+        }
+      }
+    }
+
+    async function loadGroupAnalytics() {
+      if (!selectedChat) return;
+      document.getElementById('ga-total-msgs').textContent = '...';
+      document.getElementById('ga-active-talkers').textContent = '...';
+      document.getElementById('ga-lurkers-count').textContent = '...';
+      document.getElementById('ga-top-senders-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">Computing group analytics...</div>`;
+      document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">Detecting inactive members...</div>`;
+
+      try {
+        const res = await fetch(`/api/chats/${encodeURIComponent(selectedChat.id)}/analytics`);
+        const data = await res.json();
+        if (!data.success || !data.analytics) return;
+
+        const a = data.analytics;
+        groupAnalyticsCache = a;
+        document.getElementById('ga-total-msgs').textContent = a.totalRecorded;
+        document.getElementById('ga-active-talkers').textContent = a.topSenders.length;
+        document.getElementById('ga-lurkers-count').textContent = a.lurkersCount;
+
+        // Render top senders
+        const medals = ['🥇', '🥈', '🥉'];
+        if (a.topSenders && a.topSenders.length) {
+          document.getElementById('ga-top-senders-list').innerHTML = a.topSenders.map((s, idx) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12.5px;">
+              <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                <span style="font-size:14px;width:20px;text-align:center;">${medals[idx] || `${idx + 1}.`}</span>
+                <div style="min-width:0;">
+                  <div style="font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(s.name)}</div>
+                  <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim);">+${s.number}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-family:var(--font-mono);font-weight:700;color:#38bdf8;">${s.count} msgs</span>
+                <span style="font-size:11px;color:var(--text-dim);">(${s.percentage}%)</span>
+              </div>
+            </div>
+          `).join('');
+        } else {
+          document.getElementById('ga-top-senders-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">No recorded messages yet.</div>`;
+        }
+
+        // Render lurkers
+        if (a.lurkers && a.lurkers.length) {
+          document.getElementById('ga-lurkers-list').innerHTML = a.lurkers.map((l) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span>👤</span>
+                <span style="font-family:var(--font-mono);color:var(--text-dim);">+${l.phoneNumber}</span>
+              </div>
+              <button class="btn btn-secondary" style="padding:2px 6px;font-size:10.5px;" onclick="tagLurker('${l.phoneNumber}')" title="Insert @mention into composer">@ Tag</button>
+            </div>
+          `).join('');
+        } else {
+          document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:#34d399;font-size:12px;">🎉 No inactive lurkers detected in this group!</div>`;
+        }
+      } catch (err) {
+        console.error('Failed to load group analytics:', err);
+      }
+    }
+
+    function tagLurker(phone) {
+      closeModal('modal-group-info');
+      const input = document.getElementById('chat-message-input');
+      input.value += ` @${phone} `;
+      input.focus();
+    }
+
+    function copyLurkerNumbers() {
+      if (!groupAnalyticsCache || !groupAnalyticsCache.lurkers || !groupAnalyticsCache.lurkers.length) {
+        alert('No lurkers to copy.');
+        return;
+      }
+      const list = groupAnalyticsCache.lurkers.map(l => `+${l.phoneNumber}`).join('\n');
+      navigator.clipboard.writeText(list);
+      alert(`Copied ${groupAnalyticsCache.lurkers.length} lurker phone numbers to clipboard!`);
+    }
+
+    // --- Scheduled Messages ---
+    function openScheduleModal() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+      document.getElementById('schedule-target-title').textContent = selectedChat.name;
+      document.getElementById('schedule-target-jid').textContent = selectedChat.id;
+      document.getElementById('schedule-msg-text').value = document.getElementById('chat-message-input').value.trim();
+
+      const mentionWrapper = document.getElementById('schedule-mention-wrapper');
+      if (mentionWrapper) {
+        mentionWrapper.style.display = selectedChat.isGroup ? 'block' : 'none';
+        const mentionCheck = document.getElementById('schedule-mention-check');
+        if (mentionCheck) mentionCheck.checked = false;
+      }
+
+      setSchedulePreset(60); // default +1 hour
+      openModal('modal-schedule-msg');
+    }
+
+    function setSchedulePreset(preset) {
+      const now = new Date();
+      if (typeof preset === 'number') {
+        now.setMinutes(now.getMinutes() + preset);
+      } else if (preset === 'tomorrow-9') {
+        now.setDate(now.getDate() + 1);
+        now.setHours(9, 0, 0, 0);
+      }
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('schedule-datetime-input').value = `${year}-${month}-${day}T${hours}:${minutes}`;
+    }
+
+    async function submitScheduleMessage() {
+      if (!selectedChat) return;
+      const text = document.getElementById('schedule-msg-text').value.trim();
+      const dtVal = document.getElementById('schedule-datetime-input').value;
+      if (!text) {
+        alert('Please enter message text.');
+        return;
+      }
+      if (!dtVal) {
+        alert('Please select a date and time.');
+        return;
+      }
+
+      const sendAt = new Date(dtVal).toISOString();
+      const mentionAll = Boolean(document.getElementById('schedule-mention-check')?.checked);
+      const btn = document.getElementById('btn-submit-schedule');
+      btn.disabled = true;
+      btn.textContent = 'Scheduling...';
+
+      try {
+        const res = await fetch('/api/chats/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            text,
+            sendAt,
+            mentionAll,
+            quotedMessageId: activeReplyQuote?.id,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal('modal-schedule-msg');
+          document.getElementById('chat-message-input').value = '';
+          cancelReplyQuote();
+          alert(`Message scheduled for ${new Date(sendAt).toLocaleString()}!`);
+          fetchScheduledMessages();
+        } else {
+          alert(`Failed to schedule message: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Schedule error: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Confirm Schedule \u2192';
+      }
+    }
+
+    async function openScheduledModal() {
+      openModal('modal-scheduled-list');
+      loadScheduledList();
+    }
+
+    async function loadScheduledList() {
+      const container = document.getElementById('scheduled-items-container');
+      container.innerHTML = `<div style="text-align:center;padding:15px;color:var(--text-dim);font-size:12px;">Loading scheduled messages...</div>`;
+
+      try {
+        const res = await fetch('/api/chats/scheduled');
+        const data = await res.json();
+        if (!data.success || !Array.isArray(data.scheduled)) return;
+
+        updateScheduledBadge(data.scheduled);
+
+        if (!data.scheduled.length) {
+          container.innerHTML = `<div style="text-align:center;padding:25px;color:var(--text-dim);font-size:13px;">No scheduled messages active right now.</div>`;
+          return;
+        }
+
+        container.innerHTML = data.scheduled.map((m) => {
+          const sendTime = new Date(m.sendAt);
+          const timeFormatted = sendTime.toLocaleString();
+          const isPast = sendTime.getTime() <= Date.now();
+          const targetName = chatsCache.groups.find(g => g.id === m.chatJid)?.name ||
+                             chatsCache.directChats.find(d => d.id === m.chatJid)?.name ||
+                             m.chatJid;
+
+          return `
+            <div class="scheduled-item-card">
+              <div style="min-width:0;flex:1;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                  <span style="font-weight:700;color:#38bdf8;font-size:12.5px;">${escapeHtml(targetName)}</span>
+                  ${m.mentionAll ? '<span style="font-size:10px;padding:1px 5px;background:#2d1537;color:#f472b6;border-radius:4px;">@everyone</span>' : ''}
+                </div>
+                <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.text)}</div>
+                <div style="font-size:11px;color:${isPast ? '#fb7185' : 'var(--text-dim)'};margin-top:2px;">
+                  📅 Due: ${timeFormatted} ${isPast ? '(Dispatching now)' : ''}
+                </div>
+              </div>
+              <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;color:#fb7185;" onclick="cancelScheduledMessage('${m.id}')">Cancel</button>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed to load scheduled list:', err);
+      }
+    }
+
+    async function cancelScheduledMessage(id) {
+      if (!confirm('Are you sure you want to cancel this scheduled message?')) return;
+      try {
+        const res = await fetch(`/api/chats/scheduled/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadScheduledList();
+        }
+      } catch (err) {
+        console.error('Failed to cancel scheduled message:', err);
+      }
+    }
+
+    function updateScheduledBadge(list) {
+      const badge = document.getElementById('badge-scheduled-count');
+      if (!badge) return;
+      const count = Array.isArray(list) ? list.length : 0;
+      if (count > 0) {
+        badge.textContent = count;
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    async function fetchScheduledMessages() {
+      try {
+        const res = await fetch('/api/chats/scheduled');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.scheduled)) {
+          updateScheduledBadge(data.scheduled);
+        }
+      } catch {}
+    }
+
+    // --- Multi-Chat Batch Forwarder ---
+    let forwardSourceMsg = null;
+
+    function openForwardModal(msgId) {
+      const msg = currentMessages.find(m => m.id === msgId);
+      if (!msg) {
+        alert('Message not found.');
+        return;
+      }
+      forwardSourceMsg = msg;
+      const senderDisplay = msg.senderName || msg.senderNumber || (msg.fromMe ? 'You' : 'Sender');
+      const rawText = msg.text || (msg.media ? `[${msg.media.kind}]` : '') || (msg.poll ? `[Poll: ${msg.poll.name}]` : '');
+
+      document.getElementById('forward-preview-sender').textContent = `From ${senderDisplay}`;
+      document.getElementById('forward-preview-text').textContent = rawText;
+      document.getElementById('forward-search-input').value = '';
+      renderForwardTargetList();
+      openModal('modal-forward-msg');
+    }
+
+    function renderForwardTargetList() {
+      const container = document.getElementById('forward-targets-list');
+      const allChats = [...chatsCache.groups, ...chatsCache.directChats];
+
+      if (!allChats.length) {
+        container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-dim);font-size:12px;">No chats available.</div>`;
+        return;
+      }
+
+      container.innerHTML = allChats.map(c => `
+        <label class="forward-chat-row" data-name="${escapeHtml((c.name || '').toLowerCase())}" data-jid="${c.id}">
+          <input type="checkbox" class="forward-target-checkbox" value="${c.id}" onchange="updateForwardCount()">
+          <span style="font-size:14px;">${c.isGroup ? '👥' : '👤'}</span>
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12.5px;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)}</div>
+            <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim);">${c.id}</div>
+          </div>
+        </label>
+      `).join('');
+
+      updateForwardCount();
+    }
+
+    function filterForwardChats(query) {
+      const q = (query || '').toLowerCase().trim();
+      const rows = document.querySelectorAll('#forward-targets-list .forward-chat-row');
+      rows.forEach(r => {
+        const name = r.getAttribute('data-name') || '';
+        const jid = r.getAttribute('data-jid') || '';
+        if (!q || name.includes(q) || jid.includes(q)) {
+          r.style.display = 'flex';
+        } else {
+          r.style.display = 'none';
+        }
+      });
+    }
+
+    function selectAllForward(selectAll, filterType) {
+      const checkboxes = document.querySelectorAll('.forward-target-checkbox');
+      checkboxes.forEach(cb => {
+        if (!selectAll) {
+          cb.checked = false;
+        } else if (filterType === 'groups') {
+          cb.checked = cb.value.endsWith('@g.us');
+        } else {
+          cb.checked = true;
+        }
+      });
+      updateForwardCount();
+    }
+
+    function updateForwardCount() {
+      const checked = document.querySelectorAll('.forward-target-checkbox:checked').length;
+      document.getElementById('forward-selected-count').textContent = `${checked} chat${checked === 1 ? '' : 's'} selected`;
+    }
+
+    async function submitBatchForward() {
+      if (!forwardSourceMsg) return;
+      const checkedBoxes = Array.from(document.querySelectorAll('.forward-target-checkbox:checked'));
+      const targetJids = checkedBoxes.map(cb => cb.value);
+      if (!targetJids.length) {
+        alert('Please select at least 1 destination chat.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit-forward');
+      btn.disabled = true;
+      btn.textContent = 'Forwarding...';
+
+      try {
+        const res = await fetch('/api/chats/forward-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messageId: forwardSourceMsg.id,
+            sourceJid: forwardSourceMsg.chatJid,
+            targetJids,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert(`Successfully forwarded to ${data.forwardedCount} chats!`);
+          closeModal('modal-forward-msg');
+        } else {
+          alert(`Forwarding error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Forward failed: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Forward Now \u2192';
+      }
+    }
+
+    // --- Quick Replies & Macros ---
+    const DEFAULT_MACROS = [
+      {
+        keyword: '/rules',
+        title: 'Group Rules',
+        content: '📋 Group Rules:\n1. Be polite and respectful to everyone\n2. No spam or unapproved promo\n3. Keep conversations relevant to the topic',
+      },
+      {
+        keyword: '/welcome',
+        title: 'Welcome New Member',
+        content: '👋 Welcome to the group! Please take a moment to introduce yourself and review the group rules.',
+      },
+      {
+        keyword: '/support',
+        title: 'Official Bot Support',
+        content: '🛠️ Need help? Reach out directly to our admin team or use /help to view all bot commands.',
+      },
+      {
+        keyword: '/bank',
+        title: 'Payment & Invoicing Info',
+        content: '💳 Official Payment Details:\nPlease send payment confirmation and receipt once transaction is complete.',
+      },
+    ];
+
+    function getStoredMacros() {
+      try {
+        const data = localStorage.getItem('admin_quick_replies');
+        return data ? JSON.parse(data) : DEFAULT_MACROS;
+      } catch {
+        return DEFAULT_MACROS;
+      }
+    }
+
+    function saveStoredMacros(macros) {
+      try {
+        localStorage.setItem('admin_quick_replies', JSON.stringify(macros));
+      } catch {}
+    }
+
+    function openQuickRepliesModal() {
+      openModal('modal-quick-replies');
+      renderQuickReplies();
+    }
+
+    function renderQuickReplies() {
+      const container = document.getElementById('quick-replies-list');
+      const macros = getStoredMacros();
+
+      if (!macros.length) {
+        container.innerHTML = `<div style="text-align:center;padding:15px;color:var(--text-dim);font-size:12px;">No quick replies saved. Add one below!</div>`;
+        return;
+      }
+
+      container.innerHTML = macros.map((m, idx) => `
+        <div class="macro-card">
+          <div style="min-width:0;flex:1;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <span style="font-family:var(--font-mono);font-weight:700;color:#38bdf8;font-size:11.5px;background:#151d2c;padding:2px 6px;border-radius:4px;">${escapeHtml(m.keyword)}</span>
+              <span style="font-weight:700;font-size:13px;color:var(--text);">${escapeHtml(m.title)}</span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.content)}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn btn-secondary" style="padding:4px 8px;font-size:11px;" onclick="insertMacro(${idx})">Insert</button>
+            <button class="btn btn-emerald" style="padding:4px 8px;font-size:11px;" onclick="sendMacroDirectly(${idx})">Send</button>
+            <button class="btn btn-secondary" style="padding:4px 6px;font-size:11px;color:#fb7185;" onclick="deleteQuickReply(${idx})">&times;</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function insertMacro(idx) {
+      const macros = getStoredMacros();
+      const m = macros[idx];
+      if (!m) return;
+      const input = document.getElementById('chat-message-input');
+      input.value = m.content;
+      closeModal('modal-quick-replies');
+      input.focus();
+    }
+
+    function sendMacroDirectly(idx) {
+      const macros = getStoredMacros();
+      const m = macros[idx];
+      if (!m) return;
+      document.getElementById('chat-message-input').value = m.content;
+      closeModal('modal-quick-replies');
+      sendChatMessage();
+    }
+
+    function saveNewQuickReply() {
+      const keyword = document.getElementById('macro-keyword-input').value.trim();
+      const title = document.getElementById('macro-title-input').value.trim();
+      const content = document.getElementById('macro-content-input').value.trim();
+
+      if (!keyword || !title || !content) {
+        alert('Please fill out Shortcut, Title, and Template Content.');
+        return;
+      }
+
+      const macros = getStoredMacros();
+      macros.push({ keyword: keyword.startsWith('/') ? keyword : `/${keyword}`, title, content });
+      saveStoredMacros(macros);
+
+      document.getElementById('macro-keyword-input').value = '';
+      document.getElementById('macro-title-input').value = '';
+      document.getElementById('macro-content-input').value = '';
+      renderQuickReplies();
+    }
+
+    function deleteQuickReply(idx) {
+      const macros = getStoredMacros();
+      macros.splice(idx, 1);
+      saveStoredMacros(macros);
+      renderQuickReplies();
+    }
+
     function handleChatInputKeydown(event) {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
@@ -2895,6 +3671,7 @@
 
       const bypassAdmin = document.getElementById('bypass-admin-check')?.checked;
       const queueOnMute = document.getElementById('queue-on-mute-check')?.checked;
+      const mentionAll = document.getElementById('mention-all-check')?.checked;
       const sendBtn = document.getElementById('btn-send-chat');
       sendBtn.disabled = true;
       sendBtn.innerHTML = 'Sending...';
@@ -2909,12 +3686,16 @@
             bypassAdminOnly: bypassAdmin,
             queueOnMute,
             quotedMessageId: activeReplyQuote?.id,
+            mentionAll,
           }),
         });
         const data = await res.json();
         if (data.success) {
           document.getElementById('chat-message-input').value = '';
           cancelReplyQuote();
+          if (document.getElementById('mention-all-check')) {
+            document.getElementById('mention-all-check').checked = false;
+          }
           if (data.queued) {
             alert(`Message Queued!\n${data.note}`);
           } else {
@@ -3744,6 +4525,8 @@
           }
         }
       });
+
+      socket.on('chat:scheduled-update', (list) => updateScheduledBadge(list));
     }
 
     function formatSeconds(sec) {
@@ -3769,6 +4552,7 @@
       fetchAuth();
       setupWebSocket();
       fetchChats();
+      fetchScheduledMessages();
       setInterval(checkStatus, 5000);
 
       const msgInput = document.getElementById('chat-message-input');
