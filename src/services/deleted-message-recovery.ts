@@ -252,7 +252,7 @@ function messageId(message: WAMessage): string | null {
   return messageIdFromKey(message.key);
 }
 
-function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
+export function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
   if (!message) return { message: null, viewOnce: false };
   if (depth > 10) return { message, viewOnce: false };
 
@@ -279,14 +279,6 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
     return inner;
   }
 
-  // Companion devices receive view-once media as a placeholderMessage stub.
-  // Unwrap it so downstream extraction sees the inner payload (if any).
-  const placeholder = (message as any).placeholderMessage?.message;
-  if (placeholder) {
-    const inner = unwrapMessageInfo(placeholder, depth + 1);
-    return { message: inner.message, viewOnce: true };
-  }
-
   const hasDirectViewOnce = Boolean(
     (message.imageMessage as any)?.viewOnce ||
     (message.videoMessage as any)?.viewOnce ||
@@ -301,7 +293,7 @@ function unwrapMessageInfo(message: proto.IMessage | null | undefined, depth = 0
   return { message, viewOnce: hasDirectViewOnce || hasPlaceholder };
 }
 
-function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
+export function unwrapMessage(message: proto.IMessage | null | undefined): proto.IMessage | null {
   return unwrapMessageInfo(message).message;
 }
 
@@ -916,6 +908,196 @@ export async function readDeletedMessageMedia(record: {
   return null;
 }
 
+export function unwrapQuotedMessage(message?: proto.IMessage | null, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
+  if (!message || depth > 10) return { message: message || null, viewOnce: false };
+
+  if (message.deviceSentMessage?.message) {
+    return unwrapQuotedMessage(message.deviceSentMessage.message, depth + 1);
+  }
+
+  const viewOnceMessage =
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.viewOnceMessageV2Extension?.message;
+  if (viewOnceMessage) {
+    const inner = unwrapQuotedMessage(viewOnceMessage, depth + 1);
+    return { message: inner.message, viewOnce: true };
+  }
+
+  const wrappedMessage =
+    message.ephemeralMessage?.message ||
+    message.documentWithCaptionMessage?.message ||
+    message.editedMessage?.message;
+  if (wrappedMessage) {
+    const inner = unwrapQuotedMessage(wrappedMessage, depth + 1);
+    return inner;
+  }
+
+  const hasDirectViewOnce = Boolean(
+    (message.imageMessage as any)?.viewOnce ||
+    (message.videoMessage as any)?.viewOnce ||
+    (message.audioMessage as any)?.viewOnce ||
+    (message.documentMessage as any)?.viewOnce
+  );
+
+  return { message, viewOnce: hasDirectViewOnce };
+}
+
+export function extractMediaFromQuoted(quoted: proto.IMessage): {
+  media: proto.Message.IImageMessage | proto.Message.IVideoMessage | proto.Message.IAudioMessage | proto.Message.IStickerMessage;
+  kind: 'image' | 'video' | 'audio' | 'sticker';
+  viewOnce: boolean;
+  caption?: string;
+  mimetype: string;
+} | null {
+  const { message, viewOnce } = unwrapQuotedMessage(quoted);
+  if (!message) return null;
+
+  if (message.imageMessage) {
+    return {
+      media: message.imageMessage,
+      kind: 'image',
+      viewOnce: viewOnce || Boolean((message.imageMessage as any).viewOnce),
+      caption: message.imageMessage.caption || '',
+      mimetype: message.imageMessage.mimetype || 'image/jpeg',
+    };
+  }
+
+  if (message.videoMessage) {
+    return {
+      media: message.videoMessage,
+      kind: 'video',
+      viewOnce: viewOnce || Boolean((message.videoMessage as any).viewOnce),
+      caption: message.videoMessage.caption || '',
+      mimetype: message.videoMessage.mimetype || 'video/mp4',
+    };
+  }
+
+  if (message.audioMessage) {
+    return {
+      media: message.audioMessage,
+      kind: 'audio',
+      viewOnce: viewOnce || Boolean((message.audioMessage as any).viewOnce),
+      caption: '',
+      mimetype: message.audioMessage.mimetype || 'audio/ogg',
+    };
+  }
+
+  if (message.stickerMessage) {
+    return {
+      media: message.stickerMessage,
+      kind: 'sticker',
+      viewOnce: false,
+      caption: '',
+      mimetype: message.stickerMessage.mimetype || 'image/webp',
+    };
+  }
+
+  return null;
+}
+
+export function getQuotedContextInfo(message: proto.IMessage | null | undefined): proto.IContextInfo | null | undefined {
+  if (!message) return null;
+  const unwrapped = unwrapMessage(message) || message;
+  return (
+    unwrapped?.extendedTextMessage?.contextInfo ||
+    (unwrapped as any)?.imageMessage?.contextInfo ||
+    (unwrapped as any)?.videoMessage?.contextInfo ||
+    (unwrapped as any)?.audioMessage?.contextInfo ||
+    (unwrapped as any)?.documentMessage?.contextInfo ||
+    (unwrapped as any)?.stickerMessage?.contextInfo ||
+    message?.extendedTextMessage?.contextInfo
+  );
+}
+
+export async function downloadAndCacheQuotedMedia(
+  socket: WASocket | undefined,
+  contextInfo: proto.IContextInfo,
+  currentChatJid: string,
+  fallbackSender?: SenderIdentity
+): Promise<DeletedMessageRecord | null> {
+  const quotedMessage = contextInfo.quotedMessage;
+  const quotedStanzaId = contextInfo.stanzaId;
+  const quotedParticipant = contextInfo.participant;
+
+  if (quotedStanzaId) {
+    const stored = findStoredMessageById(currentChatJid, quotedStanzaId);
+    if (stored) {
+      const buffer = await readDeletedMessageMedia(stored);
+      if (buffer && stored.media) {
+        return stored as DeletedMessageRecord;
+      }
+    }
+  }
+
+  if (!quotedMessage) return null;
+  const extracted = extractMediaFromQuoted(quotedMessage);
+  if (!extracted) return null;
+
+  let buffer: Buffer | undefined;
+
+  try {
+    const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    buffer = Buffer.concat(chunks);
+  } catch (downloadErr: any) {
+    logger.warn({ err: downloadErr?.message, stanzaId: quotedStanzaId }, 'Stream download from quoted message failed, attempting fallback...');
+    try {
+      const fakeMsg: any = {
+        key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
+        message: quotedMessage,
+      };
+      buffer = (await downloadMediaMessage(fakeMsg, 'buffer', {})) as Buffer | undefined;
+    } catch (fallbackErr: any) {
+      logger.warn({ err: fallbackErr?.message, stanzaId: quotedStanzaId }, 'downloadMediaMessage fallback from quoted message failed');
+    }
+  }
+
+  if ((!buffer || buffer.length === 0) && quotedStanzaId && socket) {
+    try {
+      const fakeMsg: any = {
+        key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
+        message: quotedMessage,
+      };
+      const retried = await triggerMediaRetry(socket, fakeMsg);
+      if (retried) {
+        const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+        buffer = Buffer.concat(chunks);
+      }
+    } catch (retryErr) {
+      logger.warn({ err: retryErr, stanzaId: quotedStanzaId }, 'Media retry for quoted message failed');
+    }
+  }
+
+  if (!buffer || buffer.length === 0) return null;
+
+  const senderIdentity: SenderIdentity = {
+    jid: quotedParticipant || fallbackSender?.jid || currentChatJid,
+    displayName: fallbackSender?.displayName || 'Sender',
+    phoneNumber: quotedParticipant?.replace(/\D/g, '') || fallbackSender?.phoneNumber || '',
+    chatJid: currentChatJid,
+    fromMe: Boolean(contextInfo?.participant ? false : fallbackSender?.fromMe),
+  };
+
+  const isVo = Boolean(extracted.viewOnce);
+  const savedRecord = await cacheAndStoreMedia(
+    currentChatJid,
+    quotedStanzaId || `vo-${Date.now()}`,
+    senderIdentity,
+    buffer,
+    extracted.kind,
+    extracted.mimetype,
+    extracted.caption || '',
+    isVo,
+    extracted.kind === 'audio' ? Boolean((extracted.media as proto.Message.IAudioMessage).ptt) : false
+  );
+
+  return savedRecord;
+}
+
 export function findStoredMessageById(chatJid: string, messageId: string): RecoverableMessage | DeletedMessageRecord | null {
   const state = loadState();
   let found: RecoverableMessage | DeletedMessageRecord | undefined;
@@ -998,6 +1180,13 @@ export async function cacheAndStoreMedia(
     }
   }
 
+  const msgIndex = state.messages.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+  if (msgIndex >= 0) {
+    state.messages[msgIndex] = { ...state.messages[msgIndex], media, viewOnce };
+  } else {
+    state.messages.push(record);
+  }
+
   saveState(state);
   return record;
 }
@@ -1009,33 +1198,51 @@ export type DeletedChatSummary = {
   lastSenderName: string;
 };
 
-export function getAllDeletedMessages(): DeletedMessageRecord[] {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+export function getAllDeletedMessages(includeViewOnce = true): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return [];
 
-  return loadState()
-    .deleted
-    .slice()
-    .reverse();
+  const state = loadState();
+  const deleted = config.DELETED_MESSAGE_RECOVERY_ENABLED ? state.deleted : [];
+  const vo = (config.VIEW_ONCE_SAVER_ENABLED && includeViewOnce) ? (state.viewOnce || []) : [];
+
+  const seen = new Set<string>();
+  const combined: DeletedMessageRecord[] = [];
+
+  for (const item of deleted) {
+    const key = `${item.chatJid}:${item.messageId}`;
+    seen.add(key);
+    combined.push(item);
+  }
+
+  for (const item of vo) {
+    const key = `${item.chatJid}:${item.messageId}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      combined.push(item);
+    }
+  }
+
+  return combined.sort(
+    (a, b) => new Date(b.deletedAt || b.timestamp).getTime() - new Date(a.deletedAt || a.timestamp).getTime()
+  );
 }
 
-export function listAllDeletedMessages(limit?: number): DeletedMessageRecord[] {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+export function listAllDeletedMessages(limit?: number, includeViewOnce = true): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return [];
 
-  const all = getAllDeletedMessages();
+  const all = getAllDeletedMessages(includeViewOnce);
   return typeof limit === 'number' && limit > 0 ? all.slice(0, limit) : all;
 }
 
-export function listDeletedMessages(chatJid?: string, limit = 30): DeletedMessageRecord[] {
-  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED) return [];
+export function listDeletedMessages(chatJid?: string, limit = 30, includeViewOnce = false): DeletedMessageRecord[] {
+  if (!config.DELETED_MESSAGE_RECOVERY_ENABLED && !config.VIEW_ONCE_SAVER_ENABLED) return [];
   if (!chatJid || chatJid === 'all' || chatJid === 'global') {
-    return listAllDeletedMessages(limit);
+    return listAllDeletedMessages(limit, includeViewOnce);
   }
 
-  return loadState()
-    .deleted
+  return getAllDeletedMessages(includeViewOnce)
     .filter((item) => item.chatJid === chatJid)
-    .slice(-boundedNumber(limit, 30, 1, 500))
-    .reverse();
+    .slice(0, boundedNumber(limit, 30, 1, 500));
 }
 
 export function listViewOnceMessages(chatJid?: string, limit = 30): DeletedMessageRecord[] {
@@ -1058,7 +1265,7 @@ export function listDeletedChats(): DeletedChatSummary[] {
   const state = loadState();
   const map = new Map<string, { count: number; lastDeletedAt: string; lastSenderName: string }>();
 
-  for (const item of state.deleted) {
+  for (const item of [...state.deleted, ...(state.viewOnce || [])]) {
     const existing = map.get(item.chatJid);
     if (existing) {
       existing.count += 1;

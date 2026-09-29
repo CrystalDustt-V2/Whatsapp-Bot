@@ -2,9 +2,12 @@ import config from '../../config';
 import {
   listDeletedMessages,
   getAllDeletedMessages,
+  getAllViewOnceMessages,
   listDeletedChats,
   listViewOnceMessages,
   readDeletedMessageMedia,
+  downloadAndCacheQuotedMedia,
+  getQuotedContextInfo,
   type DeletedMessageRecord,
 } from '../../services/deleted-message-recovery';
 import { Command, CommandCategory, type BotContext } from '../../types';
@@ -172,6 +175,19 @@ export const DeletedMessageCommand: Command = {
     const arg0 = (ctx.args[0] || '').toLowerCase();
     const arg1 = (ctx.args[1] || '').toLowerCase();
 
+    // =========================================================================
+    // CASE 0: USER QUOTED A MESSAGE -> ATTEMPT INSTANT UNLOCK & DECRYPT
+    // =========================================================================
+    const contextInfo = getQuotedContextInfo(ctx.message.message);
+    if (contextInfo?.quotedMessage || contextInfo?.stanzaId) {
+      const savedRecord = await downloadAndCacheQuotedMedia(ctx.socket, contextInfo, currentChatJid, ctx.sender);
+      if (savedRecord) {
+        const formatted = formatRecord(savedRecord, 1, false);
+        await sendRecoveredMedia(ctx, savedRecord, formatted);
+        return;
+      }
+    }
+
     // ==========================================
     // OWNER / BOT ITSELF: Global Paginated Mode
     // ==========================================
@@ -205,7 +221,7 @@ export const DeletedMessageCommand: Command = {
           }
         }
 
-        const records = listDeletedMessages(targetJid, 30);
+        const records = listDeletedMessages(targetJid, 30, true);
         if (!records.length) {
           await ctx.reply(`No deleted messages found for chat "${targetJid}".`);
           return;
@@ -215,9 +231,61 @@ export const DeletedMessageCommand: Command = {
         return;
       }
 
-      // 3. Owner subcommand: .deleted viewonce or .deleted vo -> redirect to .viewonce
+      // 3. Owner subcommand: .deleted viewonce [number|list [page]] or .deleted vo [number|list [page]]
       if (arg0 === 'viewonce' || arg0 === 'vo') {
-        await ctx.reply(`👉 View-once media is isolated and accessible only via *${config.BOT_PREFIX}viewonce* (or *${config.BOT_PREFIX}vo*).`);
+        const allVo = getAllViewOnceMessages();
+        const totalVo = allVo.length;
+
+        if (!totalVo) {
+          await ctx.reply('No view-once media saved across any chats yet.');
+          return;
+        }
+
+        const voIndex = Number(arg1);
+        if (Number.isInteger(voIndex) && voIndex >= 1 && arg1 && !['list', 'all', 'recent'].includes(arg1)) {
+          if (voIndex > totalVo) {
+            await ctx.reply(`❌ Pick a view-once number from 1 to ${totalVo}, or use *${config.BOT_PREFIX}deleted vo list*.`);
+            return;
+          }
+          const record = allVo[voIndex - 1];
+          const formatted = formatRecord(record, voIndex, true);
+          await sendRecoveredMedia(ctx, record, formatted);
+          return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(totalVo / PAGE_SIZE));
+        let page = 1;
+        const pageArg = arg1 === 'list' || arg1 === 'all' ? (ctx.args[2] || '') : arg1;
+        if (pageArg) {
+          const parsed = Number(pageArg);
+          if (Number.isInteger(parsed) && parsed >= 1) {
+            page = Math.min(totalPages, parsed);
+          }
+        }
+
+        const startIndex = (page - 1) * PAGE_SIZE;
+        const pageRecords = allVo.slice(startIndex, startIndex + PAGE_SIZE);
+
+        const lines = pageRecords.map((record, index) => {
+          const globalIndex = startIndex + index + 1;
+          const chatPrefix = `${formatChatLabel(record.chatJid)} `;
+          const media = record.media ? ` [view-once ${record.media.kind}]` : '';
+          return `${globalIndex}. ${chatPrefix}${record.senderName}${media} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
+        });
+
+        const nextPageHint =
+          page < totalPages
+            ? `📖 Page ${page}/${totalPages} • Use *${config.BOT_PREFIX}deleted vo ${page + 1}* for next page\n`
+            : `📖 Page ${page}/${totalPages} (End of view-once media)\n`;
+
+        const text =
+          `👁️ *Saved View-Once Media*\n` +
+          `*Page ${page} of ${totalPages} (Total: ${totalVo} saved items)*\n\n` +
+          `${lines.join('\n')}\n\n` +
+          `${nextPageHint}` +
+          `👉 Use *${config.BOT_PREFIX}deleted vo <number>* to restore view-once media.`;
+
+        await ctx.reply(text);
         return;
       }
 

@@ -1,22 +1,19 @@
-import { downloadContentFromMessage, downloadMediaMessage, proto, type MediaType } from '@whiskeysockets/baileys';
 import config from '../../config';
-import logger from '../../core/logger';
 import {
-    cacheAndStoreMedia,
-    findStoredMessageById,
-    getAllViewOnceMessages,
-    isMediaStub,
-    listViewOnceMessages,
-    readDeletedMessageMedia,
-    triggerMediaRetry,
-    type DeletedMessageRecord
+  downloadAndCacheQuotedMedia,
+  findStoredMessageById,
+  getAllViewOnceMessages,
+  getQuotedContextInfo,
+  listViewOnceMessages,
+  readDeletedMessageMedia,
+  type DeletedMessageRecord,
 } from '../../services/deleted-message-recovery';
-import { Command, CommandCategory, type SenderIdentity } from '../../types';
+import { Command, CommandCategory } from '../../types';
 import {
-    formatChatLabel,
-    formatRecord,
-    isOwnerOrSelf,
-    sendRecoveredMedia,
+  formatChatLabel,
+  formatRecord,
+  isOwnerOrSelf,
+  sendRecoveredMedia,
 } from './deleted';
 
 const PAGE_SIZE = 25;
@@ -29,84 +26,6 @@ function formatTime(value: string): string {
 function preview(value: string, max = 60): string {
   const text = value.replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max - 3)}...` : text || '[Media / Empty Text]';
-}
-
-function unwrapQuotedMessage(message?: proto.IMessage | null, depth = 0): { message: proto.IMessage | null; viewOnce: boolean } {
-  if (!message || depth > 10) return { message: message || null, viewOnce: false };
-
-  if (message.deviceSentMessage?.message) {
-    return unwrapQuotedMessage(message.deviceSentMessage.message, depth + 1);
-  }
-
-  const viewOnceMessage =
-    message.viewOnceMessage?.message ||
-    message.viewOnceMessageV2?.message ||
-    message.viewOnceMessageV2Extension?.message;
-  if (viewOnceMessage) {
-    const inner = unwrapQuotedMessage(viewOnceMessage, depth + 1);
-    return { message: inner.message, viewOnce: true };
-  }
-
-  const wrappedMessage =
-    message.ephemeralMessage?.message ||
-    message.documentWithCaptionMessage?.message ||
-    message.editedMessage?.message;
-  if (wrappedMessage) {
-    const inner = unwrapQuotedMessage(wrappedMessage, depth + 1);
-    return inner;
-  }
-
-  const hasDirectViewOnce = Boolean(
-    (message.imageMessage as any)?.viewOnce ||
-    (message.videoMessage as any)?.viewOnce ||
-    (message.audioMessage as any)?.viewOnce ||
-    (message.documentMessage as any)?.viewOnce
-  );
-
-  return { message, viewOnce: hasDirectViewOnce };
-}
-
-function extractMediaFromQuoted(quoted: proto.IMessage): {
-  media: proto.Message.IImageMessage | proto.Message.IVideoMessage | proto.Message.IAudioMessage;
-  kind: 'image' | 'video' | 'audio';
-  viewOnce: boolean;
-  caption?: string;
-  mimetype: string;
-} | null {
-  const { message, viewOnce } = unwrapQuotedMessage(quoted);
-  if (!message) return null;
-
-  if (message.imageMessage) {
-    return {
-      media: message.imageMessage,
-      kind: 'image',
-      viewOnce: viewOnce || Boolean((message.imageMessage as any).viewOnce),
-      caption: message.imageMessage.caption || '',
-      mimetype: message.imageMessage.mimetype || 'image/jpeg',
-    };
-  }
-
-  if (message.videoMessage) {
-    return {
-      media: message.videoMessage,
-      kind: 'video',
-      viewOnce: viewOnce || Boolean((message.videoMessage as any).viewOnce),
-      caption: message.videoMessage.caption || '',
-      mimetype: message.videoMessage.mimetype || 'video/mp4',
-    };
-  }
-
-  if (message.audioMessage) {
-    return {
-      media: message.audioMessage,
-      kind: 'audio',
-      viewOnce: viewOnce || Boolean((message.audioMessage as any).viewOnce),
-      caption: '',
-      mimetype: message.audioMessage.mimetype || 'audio/ogg',
-    };
-  }
-
-  return null;
 }
 
 export const ViewOnceCommand: Command = {
@@ -140,124 +59,28 @@ export const ViewOnceCommand: Command = {
     // =========================================================================
     // CASE 1: USER QUOTED A MESSAGE -> ATTEMPT INSTANT UNLOCK & DECRYPT
     // =========================================================================
-    const contextInfo = ctx.message.message?.extendedTextMessage?.contextInfo;
-    const quotedMessage = contextInfo?.quotedMessage;
-    const quotedStanzaId = contextInfo?.stanzaId;
-    const quotedParticipant = contextInfo?.participant;
+    const contextInfo = getQuotedContextInfo(ctx.message.message);
+    if (contextInfo?.quotedMessage || contextInfo?.stanzaId) {
+      await ctx.reply('⏳ Decrypting view-once media from quoted message...');
+      const savedRecord = await downloadAndCacheQuotedMedia(ctx.socket, contextInfo, currentChatJid, ctx.sender);
 
-    if (quotedStanzaId || quotedMessage) {
-      // 1. Check if the message is already saved in our deleted-media cache
-      if (quotedStanzaId) {
-        const stored = findStoredMessageById(currentChatJid, quotedStanzaId);
-        if (stored) {
-          const buffer = await readDeletedMessageMedia(stored);
-          const formatted = formatRecord(stored as DeletedMessageRecord, 1, false);
-          if (buffer) {
-            await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted);
-            return;
-          } else {
-            await ctx.reply(formatted);
-            return;
-          }
-        }
-      }
+      if (savedRecord) {
+        const formatted =
+          `👁️ *[VIEW-ONCE UNLOCKED]*\n` +
+          `From: ${savedRecord.senderName}${savedRecord.senderNumber ? ` (${savedRecord.senderNumber})` : ''}\n` +
+          `Type: ${savedRecord.messageType}\n` +
+          `Saved: ${formatTime(savedRecord.deletedAt)}\n\n` +
+          `${savedRecord.text || ''}`;
 
-      // 2. If not found in cache, attempt direct download from quoted message payload
-      if (quotedMessage) {
-        const extracted = extractMediaFromQuoted(quotedMessage);
-        if (extracted) {
-          try {
-            await ctx.reply('⏳ Decrypting view-once media from quoted message...');
-            let buffer: Buffer | undefined;
-
-            try {
-              const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
-              const chunks: Buffer[] = [];
-              for await (const chunk of stream) {
-                chunks.push(Buffer.from(chunk));
-              }
-              buffer = Buffer.concat(chunks);
-            } catch {
-              const fakeMsg: any = {
-                key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
-                message: quotedMessage,
-              };
-              buffer = (await downloadMediaMessage(fakeMsg, 'buffer', {}).catch(() => undefined)) as Buffer | undefined;
-            }
-
-            // Quoted payloads often arrive as a stub: the mediaKey is present
-            // but there is no directPath/url, so the download throws. The
-            // media-retry protocol (socket.updateMediaMessage) asks the server
-            // to re-upload the media and patches directPath/url in place.
-            // extracted.media is a reference into quotedMessage, so the in-place
-            // patch propagates and a re-download from it succeeds.
-            if ((!buffer || buffer.length === 0) && quotedStanzaId && isMediaStub(extracted.media as any)) {
-              try {
-                const fakeMsg: any = {
-                  key: { remoteJid: currentChatJid, id: quotedStanzaId, participant: quotedParticipant },
-                  message: quotedMessage,
-                };
-                const retried = await triggerMediaRetry(ctx.socket, fakeMsg);
-                if (retried) {
-                  const stream = await downloadContentFromMessage(extracted.media as any, extracted.kind as MediaType);
-                  const chunks: Buffer[] = [];
-                  for await (const chunk of stream) {
-                    chunks.push(Buffer.from(chunk));
-                  }
-                  buffer = Buffer.concat(chunks);
-                }
-              } catch (retryErr) {
-                logger.warn({ err: retryErr, stanzaId: quotedStanzaId }, 'media retry for quoted view-once failed');
-              }
-            }
-
-            if (!buffer || buffer.length === 0) {
-              throw new Error('Decrypted media buffer is empty or unavailable');
-            }
-
-            const senderIdentity: SenderIdentity = {
-              jid: quotedParticipant || ctx.sender.jid,
-              displayName: ctx.sender.displayName || 'Sender',
-              phoneNumber: quotedParticipant?.replace(/\D/g, '') || ctx.sender.phoneNumber,
-              chatJid: currentChatJid,
-              fromMe: Boolean(contextInfo?.participant ? false : ctx.sender.fromMe),
-            };
-
-            const savedRecord = await cacheAndStoreMedia(
-              currentChatJid,
-              quotedStanzaId || `vo-${Date.now()}`,
-              senderIdentity,
-              buffer,
-              extracted.kind,
-              extracted.mimetype,
-              extracted.caption || '',
-              true,
-              extracted.kind === 'audio' ? Boolean((extracted.media as proto.Message.IAudioMessage).ptt) : false
-            );
-
-            const formatted =
-              `👁️ *[VIEW-ONCE UNLOCKED]*\n` +
-              `From: ${savedRecord.senderName}${savedRecord.senderNumber ? ` (${savedRecord.senderNumber})` : ''}\n` +
-              `Type: ${savedRecord.messageType}\n` +
-              `Saved: ${formatTime(savedRecord.deletedAt)}\n\n` +
-              `${savedRecord.text || ''}`;
-
-            await sendRecoveredMedia(ctx, savedRecord, formatted.trim());
-            return;
-          } catch (err) {
-            logger.warn({ err, stanzaId: quotedStanzaId }, 'Failed to download view-once media from quoted payload');
-          }
-        }
-      }
-
-      // If quoted something that had no media
-      if (quotedStanzaId) {
-        await ctx.reply(
-          `❌ The quoted message was not recognized as a view-once media message, or its media has expired.\n` +
-          `👉 Use *${config.BOT_PREFIX}viewonce list* to browse already captured view-once media.`
-        );
+        await sendRecoveredMedia(ctx, savedRecord, formatted.trim());
         return;
       }
+
+      await ctx.reply(
+        `❌ The quoted message could not be unlocked as view-once media (media expired or withheld by WhatsApp).\n` +
+        `👉 Use *${config.BOT_PREFIX}viewonce list* to browse already captured view-once media.`
+      );
+      return;
     }
 
     // =========================================================================
