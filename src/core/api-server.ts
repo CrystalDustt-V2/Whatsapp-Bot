@@ -1,4 +1,4 @@
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { GroupMetadata, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import cors from 'cors';
 import crypto from 'crypto';
 import express from 'express';
@@ -6,6 +6,7 @@ import http from 'http';
 import path from 'path';
 import * as fs from 'fs';
 import qrcode from 'qrcode';
+import sharp from 'sharp';
 import { Server as SocketIOServer } from 'socket.io';
 import { commandRegistry } from './command-registry';
 import logger from './logger';
@@ -17,12 +18,47 @@ import {
   readDeletedMessageMedia,
   findStoredMessageById,
   listDeletedChats,
+  loadState,
+  unwrapMessageInfo,
   type DeletedMessageRecord,
 } from '../services/deleted-message-recovery';
+import { getSenderIdentity } from '../services/message-memory';
 import { sendRecoveredMedia, formatRecord } from '../commands/utility/deleted';
 
 interface ApiServerOptions {
   port?: number;
+}
+
+export interface DashboardChatMessage {
+  id: string;
+  chatJid: string;
+  senderJid: string;
+  senderName: string;
+  senderNumber: string;
+  fromMe: boolean;
+  timestamp: string;
+  text: string;
+  type: string;
+  media?: {
+    kind: string;
+    mimetype: string;
+    fileName?: string;
+    size?: number;
+    url?: string;
+  };
+  location?: {
+    degreesLatitude: number;
+    degreesLongitude: number;
+    name?: string;
+    address?: string;
+  };
+  contact?: {
+    displayName: string;
+    vcard: string;
+  };
+  reactions?: Record<string, number>;
+  isViewOnce?: boolean;
+  isDeleted?: boolean;
 }
 
 let botSocket: WASocket | null = null;
@@ -35,6 +71,12 @@ export class ApiServer {
   private authQR: string | null = null;
   private pairingCode: string | null = null;
 
+  // Live in-memory chat message buffer: chatJid -> DashboardChatMessage[] (latest 100)
+  private liveMessageStore = new Map<string, DashboardChatMessage[]>();
+
+  // Queue on mute: groupJid -> queued messages waiting for announce: false
+  private queuedGroupMessages = new Map<string, Array<{ text: string; queuedAt: string }>>();
+
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
     this.app = express();
@@ -43,6 +85,7 @@ export class ApiServer {
       cors: {
         origin: '*',
       },
+      maxHttpBufferSize: 1e8, // 100MB for media uploads
     });
 
     this.setupMiddleware();
@@ -50,6 +93,157 @@ export class ApiServer {
     this.setupSocketIO();
   }
 
+  // ---------------------------------------------------------------------------
+  // LIVE MESSAGE INGESTION FROM BAILEYS
+  // ---------------------------------------------------------------------------
+  handleIncomingMessage(msg: WAMessage): void {
+    const chatJid = msg.key.remoteJid;
+    if (!chatJid || !botSocket) return;
+
+    try {
+      const parsed = this.parseWAMessage(msg, botSocket);
+      if (!parsed) return;
+
+      this.addMessageToStore(parsed);
+      this.io.to('auth').emit('chat:message', parsed);
+    } catch (err) {
+      logger.debug({ err, id: msg.key.id }, 'Error parsing incoming message for dashboard');
+    }
+  }
+
+  handleGroupsUpdate(updates: Partial<GroupMetadata>[]): void {
+    for (const update of updates) {
+      if (update.id && update.announce === false) {
+        // Group was unmuted / opened to all members! Drain queue if any
+        const queued = this.queuedGroupMessages.get(update.id);
+        if (queued && queued.length && botSocket) {
+          logger.info({ groupJid: update.id, count: queued.length }, 'Group unmuted! Draining queued messages');
+          this.queuedGroupMessages.delete(update.id);
+          for (const item of queued) {
+            botSocket.sendMessage(update.id, { text: item.text }).catch((err) => {
+              logger.warn({ err, groupJid: update.id }, 'Failed to deliver queued message upon unlock');
+            });
+          }
+          this.io.to('auth').emit('bot:activity', {
+            type: 'queue:drained',
+            groupJid: update.id,
+            count: queued.length,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    }
+  }
+
+  private addMessageToStore(chatMsg: DashboardChatMessage): void {
+    const list = this.liveMessageStore.get(chatMsg.chatJid) || [];
+    const existingIndex = list.findIndex((m) => m.id === chatMsg.id);
+    if (existingIndex >= 0) {
+      list[existingIndex] = { ...list[existingIndex], ...chatMsg };
+    } else {
+      list.push(chatMsg);
+      if (list.length > 100) list.shift();
+    }
+    this.liveMessageStore.set(chatMsg.chatJid, list);
+  }
+
+  private parseWAMessage(msg: WAMessage, socket: WASocket): DashboardChatMessage | null {
+    const chatJid = msg.key.remoteJid;
+    if (!chatJid) return null;
+
+    const sender = getSenderIdentity(msg, socket);
+    const unwrapped = unwrapMessageInfo(msg.message);
+    const innerMsg = unwrapped.message;
+
+    const text =
+      msg.message?.conversation ||
+      innerMsg?.conversation ||
+      innerMsg?.extendedTextMessage?.text ||
+      innerMsg?.imageMessage?.caption ||
+      innerMsg?.videoMessage?.caption ||
+      innerMsg?.documentMessage?.caption ||
+      '';
+
+    const type = innerMsg ? Object.keys(innerMsg)[0] || 'conversation' : 'unknown';
+
+    let media: DashboardChatMessage['media'] = undefined;
+    if (innerMsg?.imageMessage) {
+      media = {
+        kind: 'image',
+        mimetype: innerMsg.imageMessage.mimetype || 'image/jpeg',
+        size: Number(innerMsg.imageMessage.fileLength) || 0,
+      };
+    } else if (innerMsg?.videoMessage) {
+      media = {
+        kind: 'video',
+        mimetype: innerMsg.videoMessage.mimetype || 'video/mp4',
+        size: Number(innerMsg.videoMessage.fileLength) || 0,
+      };
+    } else if (innerMsg?.audioMessage) {
+      media = {
+        kind: 'audio',
+        mimetype: innerMsg.audioMessage.mimetype || 'audio/ogg',
+        size: Number(innerMsg.audioMessage.fileLength) || 0,
+      };
+    } else if (innerMsg?.documentMessage) {
+      media = {
+        kind: 'document',
+        mimetype: innerMsg.documentMessage.mimetype || 'application/octet-stream',
+        fileName: innerMsg.documentMessage.fileName || 'file',
+        size: Number(innerMsg.documentMessage.fileLength) || 0,
+      };
+    } else if (innerMsg?.stickerMessage) {
+      media = {
+        kind: 'sticker',
+        mimetype: innerMsg.stickerMessage.mimetype || 'image/webp',
+        size: Number(innerMsg.stickerMessage.fileLength) || 0,
+      };
+    }
+
+    let location: DashboardChatMessage['location'] = undefined;
+    if (innerMsg?.locationMessage) {
+      location = {
+        degreesLatitude: innerMsg.locationMessage.degreesLatitude || 0,
+        degreesLongitude: innerMsg.locationMessage.degreesLongitude || 0,
+        name: innerMsg.locationMessage.name || undefined,
+        address: innerMsg.locationMessage.address || undefined,
+      };
+    }
+
+    let contact: DashboardChatMessage['contact'] = undefined;
+    if (innerMsg?.contactMessage) {
+      contact = {
+        displayName: innerMsg.contactMessage.displayName || 'Contact',
+        vcard: innerMsg.contactMessage.vcard || '',
+      };
+    }
+
+    const tsNum =
+      typeof msg.messageTimestamp === 'number'
+        ? msg.messageTimestamp
+        : (msg.messageTimestamp as any)?.low || 0;
+    const timestamp = tsNum ? new Date(tsNum * 1000).toISOString() : new Date().toISOString();
+
+    return {
+      id: msg.key.id || `msg-${Date.now()}`,
+      chatJid,
+      senderJid: sender.jid,
+      senderName: sender.displayName,
+      senderNumber: sender.phoneNumber,
+      fromMe: Boolean(msg.key.fromMe),
+      timestamp,
+      text,
+      type,
+      media,
+      location,
+      contact,
+      isViewOnce: Boolean(unwrapped.viewOnce || (msg.key as any)?.isViewOnce),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // AUTHENTICATION & STATUS
+  // ---------------------------------------------------------------------------
   private getStatusPayload(isAuthed = false) {
     const mem = process.memoryUsage();
     const botUser = botSocket?.user;
@@ -167,10 +361,13 @@ export class ApiServer {
 
   private setupMiddleware() {
     this.app.use(cors());
-    this.app.use(express.json({ limit: '10mb' }));
-    this.app.use(express.urlencoded({ extended: true }));
+    this.app.use(express.json({ limit: '100mb' }));
+    this.app.use(express.urlencoded({ extended: true, limit: '100mb' }));
   }
 
+  // ---------------------------------------------------------------------------
+  // ROUTES SETUP
+  // ---------------------------------------------------------------------------
   private setupRoutes() {
     // Landing page
     this.app.get('/', (req, res) => {
@@ -261,7 +458,7 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
-    // ADMIN DASHBOARD: CHATS & GROUPS API
+    // CHATS & GROUPS LIST API
     // -------------------------------------------------------------------------
     this.app.get('/api/chats', this.requireDashboardAuth.bind(this), async (req, res) => {
       if (!botSocket) {
@@ -348,6 +545,92 @@ export class ApiServer {
       }
     });
 
+    // -------------------------------------------------------------------------
+    // CHAT MESSAGE HISTORY API (READ REAL MESSAGES)
+    // -------------------------------------------------------------------------
+    this.app.get('/api/chats/:jid/messages', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 60));
+
+      const messageMap = new Map<string, DashboardChatMessage>();
+
+      // 1. In-memory live store messages
+      const live = this.liveMessageStore.get(jid) || [];
+      for (const m of live) {
+        messageMap.set(m.id, m);
+      }
+
+      // 2. Read from AI memory (ai-memory.jsonl)
+      const aiMemoryPath = path.join(config.SESSION_PATH, 'ai-memory.jsonl');
+      if (fs.existsSync(aiMemoryPath)) {
+        try {
+          const lines = fs.readFileSync(aiMemoryPath, 'utf8').split(/\r?\n/).filter(Boolean);
+          for (const line of lines.slice(-2000)) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.chatJid === jid) {
+                const id = entry.messageId || `ai-${entry.ts}-${entry.senderJid}`;
+                if (!messageMap.has(id)) {
+                  messageMap.set(id, {
+                    id,
+                    chatJid: entry.chatJid,
+                    senderJid: entry.senderJid,
+                    senderName: entry.senderName,
+                    senderNumber: entry.senderNumber,
+                    fromMe: Boolean(entry.fromMe),
+                    timestamp: entry.ts,
+                    text: entry.text,
+                    type: entry.messageType || 'conversation',
+                  });
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      // 3. Read from recovery state (loadState().messages, deleted, viewOnce)
+      try {
+        const state = loadState();
+        const allRecovered = [...state.messages, ...state.deleted, ...(state.viewOnce || [])];
+        for (const item of allRecovered) {
+          if (item.chatJid === jid) {
+            const isDel = state.deleted.some((d: any) => d.messageId === item.messageId);
+            const isVo = Boolean(item.viewOnce || (state.viewOnce || []).some((v: any) => v.messageId === item.messageId));
+            const existing = messageMap.get(item.messageId);
+
+            const mediaUrl = item.media ? `/api/vault/media/${encodeURIComponent(item.messageId)}?chatJid=${encodeURIComponent(jid)}` : undefined;
+
+            messageMap.set(item.messageId, {
+              id: item.messageId,
+              chatJid: item.chatJid,
+              senderJid: item.senderJid,
+              senderName: item.senderName,
+              senderNumber: item.senderNumber,
+              fromMe: item.fromMe,
+              timestamp: item.timestamp,
+              text: item.text,
+              type: item.messageType,
+              media: item.media ? { ...item.media, url: mediaUrl } : existing?.media,
+              isDeleted: isDel,
+              isViewOnce: isVo,
+            });
+          }
+        }
+      } catch {}
+
+      const sorted = Array.from(messageMap.values())
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        .slice(-limit);
+
+      res.json({
+        success: true,
+        chatJid: jid,
+        messages: sorted,
+        count: sorted.length,
+      });
+    });
+
     this.app.get('/api/chats/:jid', this.requireDashboardAuth.bind(this), async (req, res) => {
       const jid = String(req.params.jid || '');
       if (!botSocket) {
@@ -400,10 +683,10 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
-    // ADMIN DASHBOARD: SEND CHAT (WITH ADMIN-ONLY GROUP BYPASS / DISPATCH)
+    // SEND CHAT (TEXT, WITH ADMIN-ONLY BYPASS OR QUEUE ON MUTE)
     // -------------------------------------------------------------------------
     this.app.post('/api/chats/send', this.requireDashboardAuth.bind(this), async (req, res) => {
-      const { jid, text, bypassAdminOnly } = req.body || {};
+      const { jid, text, bypassAdminOnly, queueOnUnlock } = req.body || {};
       if (!jid || !text?.trim()) {
         res.status(400).json({ success: false, error: 'JID and text are required.' });
         return;
@@ -432,20 +715,27 @@ export class ApiServer {
             const isBotAdmin = Boolean(me?.admin);
 
             if (isAnnounce && !isBotAdmin) {
+              if (queueOnUnlock) {
+                const list = this.queuedGroupMessages.get(jid) || [];
+                list.push({ text: text.trim(), queuedAt: new Date().toISOString() });
+                this.queuedGroupMessages.set(jid, list);
+                res.json({
+                  success: true,
+                  queued: true,
+                  note: 'Message queued! It will automatically dispatch as soon as the group is unmuted by admins.',
+                });
+                return;
+              }
+
               try {
                 const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-                this.io.to('auth').emit('bot:activity', {
-                  type: 'chat:send',
-                  jid,
-                  text: text.trim(),
-                  timestamp: new Date().toISOString(),
-                });
+                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
                 res.json({ success: true, messageId: sent?.key.id, note: 'Sent as group member.' });
                 return;
               } catch (sendErr: any) {
                 res.status(403).json({
                   success: false,
-                  error: 'This group is restricted to Admins only and this bot is not an admin. Promote the bot to admin in this group to send messages.',
+                  error: 'This group is restricted to Admins only and this bot is not an admin. You can check "Queue on Mute" to auto-send when opened.',
                 });
                 return;
               }
@@ -459,22 +749,18 @@ export class ApiServer {
                   await botSocket.groupSettingUpdate(jid, 'announcement');
                   bypassed = true;
                   note = 'Bypassed admin-only mode (temporarily unlocked group, sent message, and re-locked).';
-                  this.io.to('auth').emit('bot:activity', {
-                    type: 'chat:send',
-                    jid,
-                    text: text.trim(),
-                    bypassed: true,
-                    timestamp: new Date().toISOString(),
-                  });
+                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
                   res.json({ success: true, messageId: sent?.key.id, bypassed, note });
                   return;
                 } catch (toggleErr) {
                   const sent = await botSocket.sendMessage(jid, { text: text.trim() });
+                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
                   res.json({ success: true, messageId: sent?.key.id, note: 'Sent directly using bot Admin privileges.' });
                   return;
                 }
               } else {
                 const sent = await botSocket.sendMessage(jid, { text: text.trim() });
+                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
                 res.json({ success: true, messageId: sent?.key.id, note: 'Sent directly using bot Admin privileges.' });
                 return;
               }
@@ -485,12 +771,7 @@ export class ApiServer {
         }
 
         const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-        this.io.to('auth').emit('bot:activity', {
-          type: 'chat:send',
-          jid,
-          text: text.trim(),
-          timestamp: new Date().toISOString(),
-        });
+        this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
 
         res.json({ success: true, messageId: sent?.key.id, note });
       } catch (err: any) {
@@ -499,7 +780,361 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
-    // ADMIN DASHBOARD: MULTI-COMMAND EXECUTION RUNNER
+    // SEND MEDIA & ATTACHMENTS (IMAGE, VIDEO, AUDIO/VOICE NOTE, DOCUMENT, STICKER)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-media', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, file, caption, mimetype, fileName, viewOnce, isVoiceNote, bypassAdminOnly } = req.body || {};
+      if (!jid || !file) {
+        res.status(400).json({ success: false, error: 'JID and file data are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        const matches = file.match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
+        const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(file, 'base64');
+        const effectiveMime = (matches ? matches[1] : (mimetype || 'application/octet-stream')).toLowerCase();
+
+        // Optional announce bypass if group
+        if (jid.endsWith('@g.us') && bypassAdminOnly) {
+          try {
+            await botSocket.groupSettingUpdate(jid, 'not_announcement');
+          } catch {}
+        }
+
+        let sent: any;
+        let kind = 'document';
+
+        if (effectiveMime.startsWith('image/') && !effectiveMime.includes('webp')) {
+          kind = 'image';
+          sent = await botSocket.sendMessage(jid, {
+            image: buffer,
+            caption: caption || undefined,
+            viewOnce: Boolean(viewOnce),
+          });
+        } else if (effectiveMime.startsWith('video/')) {
+          kind = 'video';
+          sent = await botSocket.sendMessage(jid, {
+            video: buffer,
+            caption: caption || undefined,
+            viewOnce: Boolean(viewOnce),
+          });
+        } else if (effectiveMime.startsWith('audio/')) {
+          kind = 'audio';
+          sent = await botSocket.sendMessage(jid, {
+            audio: buffer,
+            mimetype: effectiveMime,
+            ptt: Boolean(isVoiceNote),
+          });
+        } else if (effectiveMime.includes('webp')) {
+          kind = 'sticker';
+          sent = await botSocket.sendMessage(jid, {
+            sticker: buffer,
+          });
+        } else {
+          kind = 'document';
+          sent = await botSocket.sendMessage(jid, {
+            document: buffer,
+            mimetype: effectiveMime,
+            fileName: fileName || 'attachment',
+            caption: caption || undefined,
+          });
+        }
+
+        if (jid.endsWith('@g.us') && bypassAdminOnly) {
+          try {
+            await botSocket.groupSettingUpdate(jid, 'announcement');
+          } catch {}
+        }
+
+        const msgObj: DashboardChatMessage = {
+          id: sent?.key.id || `media-${Date.now()}`,
+          chatJid: jid,
+          senderJid: botSocket.user?.id || '',
+          senderName: botSocket.user?.name || 'Bot',
+          senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+          fromMe: true,
+          timestamp: new Date().toISOString(),
+          text: caption || `[${kind.toUpperCase()}]`,
+          type: kind,
+          media: {
+            kind,
+            mimetype: effectiveMime,
+            fileName,
+            size: buffer.length,
+          },
+          isViewOnce: Boolean(viewOnce),
+        };
+        this.addMessageToStore(msgObj);
+        this.io.to('auth').emit('chat:message', msgObj);
+
+        res.json({ success: true, messageId: sent?.key.id, kind });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to send media attachment.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SEND LOCATION
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-location', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, latitude, longitude, name, address } = req.body || {};
+      if (!jid || latitude === undefined || longitude === undefined) {
+        res.status(400).json({ success: false, error: 'JID, latitude, and longitude are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        const sent = await botSocket.sendMessage(jid, {
+          location: {
+            degreesLatitude: Number(latitude),
+            degreesLongitude: Number(longitude),
+            name: name || undefined,
+            address: address || undefined,
+          },
+        });
+
+        const msgObj: DashboardChatMessage = {
+          id: sent?.key.id || `loc-${Date.now()}`,
+          chatJid: jid,
+          senderJid: botSocket.user?.id || '',
+          senderName: botSocket.user?.name || 'Bot',
+          senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+          fromMe: true,
+          timestamp: new Date().toISOString(),
+          text: `📍 Location: ${name || `${latitude}, ${longitude}`}`,
+          type: 'location',
+          location: {
+            degreesLatitude: Number(latitude),
+            degreesLongitude: Number(longitude),
+            name: name || undefined,
+            address: address || undefined,
+          },
+        };
+        this.addMessageToStore(msgObj);
+        this.io.to('auth').emit('chat:message', msgObj);
+
+        res.json({ success: true, messageId: sent?.key.id });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to send location.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SEND CONTACT (VCARD)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-contact', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, displayName, phoneNumber, organization } = req.body || {};
+      if (!jid || !displayName || !phoneNumber) {
+        res.status(400).json({ success: false, error: 'JID, displayName, and phoneNumber are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+        const vcard =
+          'BEGIN:VCARD\n' +
+          'VERSION:3.0\n' +
+          `FN:${displayName}\n` +
+          `ORG:${organization || ''};\n` +
+          `TEL;type=CELL;type=VOICE;waid=${cleanPhone}:${phoneNumber}\n` +
+          'END:VCARD';
+
+        const sent = await botSocket.sendMessage(jid, {
+          contacts: {
+            displayName,
+            contacts: [{ vcard }],
+          },
+        });
+
+        const msgObj: DashboardChatMessage = {
+          id: sent?.key.id || `contact-${Date.now()}`,
+          chatJid: jid,
+          senderJid: botSocket.user?.id || '',
+          senderName: botSocket.user?.name || 'Bot',
+          senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+          fromMe: true,
+          timestamp: new Date().toISOString(),
+          text: `👤 Contact: ${displayName} (${phoneNumber})`,
+          type: 'contact',
+          contact: {
+            displayName,
+            vcard,
+          },
+        };
+        this.addMessageToStore(msgObj);
+        this.io.to('auth').emit('chat:message', msgObj);
+
+        res.json({ success: true, messageId: sent?.key.id });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to send contact.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SEND STICKER (AUTO-CONVERTS IMAGE TO 512x512 WEBP VIA SHARP)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-sticker', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, image } = req.body || {};
+      if (!jid || !image) {
+        res.status(400).json({ success: false, error: 'JID and image are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        const matches = image.match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
+        const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(image, 'base64');
+
+        // Convert to standard 512x512 WebP sticker format
+        const webpBuffer = await sharp(buffer)
+          .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+          .webp({ quality: 80 })
+          .toBuffer();
+
+        const sent = await botSocket.sendMessage(jid, {
+          sticker: webpBuffer,
+        });
+
+        const msgObj: DashboardChatMessage = {
+          id: sent?.key.id || `sticker-${Date.now()}`,
+          chatJid: jid,
+          senderJid: botSocket.user?.id || '',
+          senderName: botSocket.user?.name || 'Bot',
+          senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+          fromMe: true,
+          timestamp: new Date().toISOString(),
+          text: `[STICKER]`,
+          type: 'sticker',
+          media: {
+            kind: 'sticker',
+            mimetype: 'image/webp',
+            size: webpBuffer.length,
+          },
+        };
+        this.addMessageToStore(msgObj);
+        this.io.to('auth').emit('chat:message', msgObj);
+
+        res.json({ success: true, messageId: sent?.key.id });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to convert and send sticker.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SEND REACTION EMOJI
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-reaction', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, messageId, emoji, participant, fromMe } = req.body || {};
+      if (!jid || !messageId) {
+        res.status(400).json({ success: false, error: 'JID and messageId are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        await botSocket.sendMessage(jid, {
+          react: {
+            text: emoji || '', // empty string removes reaction
+            key: {
+              remoteJid: jid,
+              id: messageId,
+              participant: participant || undefined,
+              fromMe: Boolean(fromMe),
+            },
+          },
+        });
+
+        this.io.to('auth').emit('chat:reaction', {
+          chatJid: jid,
+          messageId,
+          emoji: emoji || '',
+        });
+
+        res.json({ success: true });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to send reaction.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // DELETE / REVOKE MESSAGE ("DELETE FOR EVERYONE")
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/delete-message', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, messageId, participant, fromMe } = req.body || {};
+      if (!jid || !messageId) {
+        res.status(400).json({ success: false, error: 'JID and messageId are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+
+      try {
+        await botSocket.sendMessage(jid, {
+          delete: {
+            remoteJid: jid,
+            id: messageId,
+            participant: participant || undefined,
+            fromMe: Boolean(fromMe),
+          },
+        });
+
+        res.json({ success: true, message: 'Message revocation sent.' });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to delete message.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SET PRESENCE (TYPING, RECORDING, AVAILABLE, PAUSED)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/presence', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, presence } = req.body || {};
+      if (!jid || !presence) {
+        res.status(400).json({ success: false, error: 'JID and presence are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        await botSocket.sendPresenceUpdate(presence, jid);
+        res.json({ success: true, presence });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // MULTI-COMMAND BATCH RUNNER
     // -------------------------------------------------------------------------
     this.app.post('/api/commands/execute', this.requireDashboardAuth.bind(this), async (req, res) => {
       const { commands, targetJid, sendToChat, delayMs } = req.body || {};
@@ -631,7 +1266,7 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
-    // ADMIN DASHBOARD: BROADCAST API
+    // BROADCAST TOOL
     // -------------------------------------------------------------------------
     this.app.post('/api/broadcast', this.requireDashboardAuth.bind(this), async (req, res) => {
       const { jids, text, delayMs } = req.body || {};
@@ -674,7 +1309,7 @@ export class ApiServer {
     });
 
     // -------------------------------------------------------------------------
-    // ADMIN DASHBOARD: VIEW-ONCE & DELETED RECOVERY VAULT API
+    // VIEW-ONCE & DELETED RECOVERY VAULT
     // -------------------------------------------------------------------------
     this.app.get('/api/vault/viewonce', this.requireDashboardAuth.bind(this), (req, res) => {
       try {
@@ -817,6 +1452,23 @@ export class ApiServer {
     });
 
     this.app.use(express.static(path.join(process.cwd(), 'public')));
+  }
+
+  private recordOutgoingChatMessage(chatJid: string, messageId: string | undefined, text: string, type: string) {
+    if (!botSocket) return;
+    const msgObj: DashboardChatMessage = {
+      id: messageId || `sent-${Date.now()}`,
+      chatJid,
+      senderJid: botSocket.user?.id || '',
+      senderName: botSocket.user?.name || 'Bot',
+      senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+      fromMe: true,
+      timestamp: new Date().toISOString(),
+      text,
+      type,
+    };
+    this.addMessageToStore(msgObj);
+    this.io.to('auth').emit('chat:message', msgObj);
   }
 
   private setupSocketIO() {

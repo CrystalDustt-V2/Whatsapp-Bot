@@ -207,7 +207,7 @@ function removeStaleMediaFiles(previous: RecoveryState, next: RecoveryState): vo
   }
 }
 
-function loadState(): RecoveryState {
+export function loadState(): RecoveryState {
   if (stateCache) return stateCache;
 
   try {

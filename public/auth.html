@@ -468,18 +468,19 @@
       align-items: center;
     }
     .chat-view-body {
+      background: #0b101b url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23131c2d' fill-opacity='0.4' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
       flex: 1;
-      padding: 20px;
+      padding: 16px 20px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 10px;
     }
     .admin-notice-box {
       background: rgba(245, 158, 11, 0.08);
       border: 1px solid rgba(245, 158, 11, 0.25);
       border-radius: 10px;
-      padding: 14px 16px;
+      padding: 12px 14px;
       display: flex;
       gap: 12px;
       font-size: 13px;
@@ -492,30 +493,283 @@
       color: #a7f3d0;
     }
 
+    /* WhatsApp Bubble Stream */
+    .chat-bubbles-stream {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chat-bubble-row {
+      display: flex;
+      width: 100%;
+      position: relative;
+    }
+    .chat-bubble-row.outgoing {
+      justify-content: flex-end;
+    }
+    .chat-bubble-row.incoming {
+      justify-content: flex-start;
+    }
+    .chat-bubble {
+      max-width: 74%;
+      min-width: 140px;
+      padding: 8px 12px;
+      position: relative;
+      font-size: 13.5px;
+      line-height: 1.45;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      word-break: break-word;
+      transition: all 0.15s;
+    }
+    .chat-bubble-row.outgoing .chat-bubble {
+      background: #005c4b;
+      color: #e9edef;
+      border-radius: 12px 12px 2px 12px;
+      border: 1px solid rgba(0, 168, 132, 0.35);
+    }
+    .chat-bubble-row.incoming .chat-bubble {
+      background: #1f2c34;
+      color: #e9edef;
+      border-radius: 12px 12px 12px 2px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .bubble-sender {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 3px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .bubble-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      font-size: 10.5px;
+      color: rgba(255, 255, 255, 0.55);
+      margin-top: 4px;
+    }
+    .bubble-badges {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 4px;
+    }
+    .bubble-tag-vo {
+      font-size: 10px;
+      font-weight: 800;
+      background: rgba(244, 63, 94, 0.25);
+      color: #fb7185;
+      padding: 1px 6px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .bubble-tag-del {
+      font-size: 10px;
+      font-weight: 800;
+      background: rgba(245, 158, 11, 0.25);
+      color: #fbbf24;
+      padding: 1px 6px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Media in Bubbles */
+    .bubble-image-thumb, .bubble-video-thumb {
+      max-width: 100%;
+      max-height: 280px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: block;
+      margin-bottom: 6px;
+      object-fit: cover;
+    }
+    .bubble-sticker-thumb {
+      width: 130px;
+      height: 130px;
+      object-fit: contain;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .bubble-audio-player {
+      width: 250px;
+      max-width: 100%;
+      margin: 4px 0;
+      height: 38px;
+    }
+    .bubble-card-attachment {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 8px;
+      margin: 4px 0;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .attachment-icon-box {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    /* Hover Toolbar & Reaction Pills */
+    .bubble-actions-hover {
+      position: absolute;
+      top: -14px;
+      display: none;
+      background: #111b21;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 2px 6px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      z-index: 10;
+      gap: 3px;
+      align-items: center;
+    }
+    .chat-bubble-row.outgoing .bubble-actions-hover { right: 8px; }
+    .chat-bubble-row.incoming .bubble-actions-hover { left: 8px; }
+    .chat-bubble-row:hover .bubble-actions-hover { display: flex; }
+    .action-emoji-btn {
+      background: transparent;
+      border: none;
+      font-size: 15px;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 50%;
+      transition: transform 0.15s;
+    }
+    .action-emoji-btn:hover {
+      transform: scale(1.3);
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .action-revoke-btn {
+      background: transparent;
+      border: none;
+      color: #fb7185;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .action-revoke-btn:hover {
+      background: rgba(251, 113, 133, 0.2);
+    }
+    .bubble-reactions-pill {
+      position: absolute;
+      bottom: -11px;
+      background: #182229;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      padding: 1px 7px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+      z-index: 5;
+    }
+    .chat-bubble-row.outgoing .bubble-reactions-pill { right: 10px; }
+    .chat-bubble-row.incoming .bubble-reactions-pill { left: 10px; }
+
+    /* Composer & Action Bar */
     .chat-view-composer {
-      padding: 16px 20px;
+      padding: 12px 18px;
       border-top: 1px solid var(--border);
       background: var(--card-surface);
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
-    .composer-toolbar {
+    .composer-actions-bar {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .attachment-btn-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .icon-action-btn {
+      background: #151d2c;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-size: 12.5px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s;
+    }
+    .icon-action-btn:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: rgba(56, 189, 248, 0.4);
+      color: #38bdf8;
+    }
+    .recording-box {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 8px;
+      padding: 5px 12px;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      color: #fca5a5;
       font-size: 13px;
+    }
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      background: #ef4444;
+      border-radius: 50%;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(1.2); }
+      100% { opacity: 1; transform: scale(1); }
     }
     .bypass-toggle {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       color: #38bdf8;
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
     }
     .bypass-toggle input { width: auto; }
+    .queue-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #fbbf24;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .queue-toggle input { width: auto; }
 
     /* Command Runner */
     .terminal-output {
@@ -751,6 +1005,10 @@
           <!-- Left: Chat List -->
           <div class="chat-list-pane">
             <div class="chat-search-bar">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:700;font-size:14px;color:var(--text);">Chats & Groups</span>
+                <button class="btn btn-secondary" style="padding:4px 8px;font-size:11.5px;" onclick="openNewChatModal()">+ Direct JID</button>
+              </div>
               <input type="text" id="chat-search-input" placeholder="Search chats and groups..." oninput="renderChatList()">
               <div class="filter-chips">
                 <span class="chip active" onclick="setChatFilter('all', this)">All</span>
@@ -764,17 +1022,30 @@
             </div>
           </div>
 
-          <!-- Right: Chat Inspector & Message Sender -->
+          <!-- Right: Chat Inspector, Message History Stream & Sender -->
           <div class="chat-view-pane">
             <div class="chat-view-header">
-              <div>
-                <h3 id="current-chat-title">Select a Chat or Group</h3>
-                <div id="current-chat-jid" style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);">No conversation selected</div>
+              <div style="display:flex;align-items:center;gap:12px;">
+                <div id="current-chat-avatar" class="chat-item-avatar" style="width:38px;height:38px;font-size:18px;">💬</div>
+                <div>
+                  <h3 id="current-chat-title" style="margin:0;font-size:15px;">Select a Chat or Group</h3>
+                  <div id="current-chat-jid" style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);">No conversation selected</div>
+                </div>
               </div>
-              <div id="current-chat-badges"></div>
+              <div style="display:flex;align-items:center;gap:8px;" id="current-chat-controls">
+                <select id="chat-presence-select" onchange="changeChatPresence(this.value)" style="background:#151d2c;border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:8px;font-size:12px;cursor:pointer;">
+                  <option value="">Presence: Normal</option>
+                  <option value="composing">💬 Typing...</option>
+                  <option value="recording">🎙️ Recording...</option>
+                  <option value="available">🟢 Online</option>
+                  <option value="paused">⏸️ Paused</option>
+                </select>
+                <button class="btn btn-secondary" style="padding:5px 9px;font-size:12px;" onclick="exportChatHistory()" title="Export chat transcript">⬇️ Export</button>
+                <button class="btn btn-secondary" style="padding:5px 9px;font-size:12px;" onclick="loadMessagesForSelectedChat(true)" title="Refresh messages">🔄</button>
+              </div>
             </div>
 
-            <div class="chat-view-body">
+            <div class="chat-view-body" id="chat-view-body-el">
               <div id="admin-group-notice" class="admin-notice-box" style="display:none;">
                 <div style="font-size:20px;">🔒</div>
                 <div>
@@ -783,27 +1054,70 @@
                 </div>
               </div>
 
-              <div id="chat-session-history" style="display:flex;flex-direction:column;gap:10px;">
-                <div style="text-align:center;color:var(--text-dim);font-size:13px;padding:30px 0;">
-                  Ready to send messages to this conversation directly from your dashboard.
+              <!-- Live WhatsApp Message History Stream -->
+              <div id="chat-session-history" class="chat-bubbles-stream">
+                <div style="text-align:center;color:var(--text-dim);font-size:13px;padding:40px 0;">
+                  Select a chat on the left to read messages and start interacting.
                 </div>
               </div>
             </div>
 
             <div class="chat-view-composer">
-              <div class="composer-toolbar">
-                <label id="bypass-wrapper" class="bypass-toggle" style="display:none;">
-                  <input type="checkbox" id="bypass-admin-check">
-                  <span>⚡ Bypass Admin-Only Mode (Temporary Toggle & Re-lock)</span>
-                </label>
-                <div style="font-size:12px;color:var(--text-dim);">Markdown supported</div>
+              <!-- Rich Media & Tool Actions Bar -->
+              <div class="composer-actions-bar">
+                <div class="attachment-btn-group">
+                  <button class="icon-action-btn" type="button" onclick="openMediaModal()" title="Send Image, Video, Audio, or Document">
+                    <span>📎</span> Media / Doc
+                  </button>
+                  <button class="icon-action-btn" type="button" id="btn-toggle-voice" onclick="toggleVoiceRecording()" title="Record and send voice note">
+                    <span>🎙️</span> Voice Note
+                  </button>
+                  <button class="icon-action-btn" type="button" onclick="openStickerModal()" title="Convert image to WhatsApp sticker">
+                    <span>🎨</span> Sticker
+                  </button>
+                  <button class="icon-action-btn" type="button" onclick="openLocationModal()" title="Share live or custom GPS location pin">
+                    <span>📍</span> Location
+                  </button>
+                  <button class="icon-action-btn" type="button" onclick="openContactModal()" title="Send vCard contact">
+                    <span>👤</span> Contact
+                  </button>
+                </div>
+
+                <!-- Voice Recording Indicator -->
+                <div id="recording-indicator" class="recording-box">
+                  <span class="pulse-dot"></span>
+                  <span>Recording Voice Note:</span>
+                  <strong id="record-timer" style="font-family:var(--font-mono);">00:00</strong>
+                  <button class="icon-action-btn" style="color:#fb7185;padding:2px 7px;font-size:11px;" onclick="cancelVoiceRecording()">🗑️ Cancel</button>
+                  <button class="icon-action-btn" style="color:#34d399;padding:2px 7px;font-size:11px;" onclick="stopVoiceRecording(true)">📤 Send</button>
+                </div>
+
+                <!-- Admin & Queue Toggles -->
+                <div style="display:flex;align-items:center;gap:12px;">
+                  <label id="bypass-wrapper" class="bypass-toggle" style="display:none;" title="Temporarily un-announce group, dispatch message, and re-lock">
+                    <input type="checkbox" id="bypass-admin-check">
+                    <span>⚡ Admin Bypass</span>
+                  </label>
+                  <label id="queue-wrapper" class="queue-toggle" style="display:none;" title="Queue message until group is unmuted by admins">
+                    <input type="checkbox" id="queue-on-mute-check">
+                    <span>⏳ Queue on Mute</span>
+                  </label>
+                </div>
               </div>
-              <textarea id="chat-message-input" rows="3" placeholder="Type a message or announcement..."></textarea>
-              <div style="display:flex;justify-content:flex-end;gap:10px;">
-                <button class="btn btn-emerald" id="btn-send-chat" onclick="sendChatMessage()">
-                  <span>Send Message</span>
-                  <span>&rarr;</span>
-                </button>
+
+              <!-- Message Composer Textarea -->
+              <textarea id="chat-message-input" rows="2" placeholder="Type a message... (Press Enter to send, Shift+Enter for new line)" onkeydown="handleChatInputKeydown(event)"></textarea>
+
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div style="font-size:11.5px;color:var(--text-dim);">
+                  Markdown formatting supported (*bold*, _italic_, ~strike~, `code`)
+                </div>
+                <div style="display:flex;gap:10px;">
+                  <button class="btn btn-emerald" id="btn-send-chat" onclick="sendChatMessage()">
+                    <span>Send</span>
+                    <span>&rarr;</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1015,6 +1329,161 @@
         Unlock Console
       </button>
       <div id="modal-error" style="color:#fb7185;font-size:13px;margin-top:12px;display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Modal: Send Media / Document -->
+  <div id="modal-media" class="modal-overlay">
+    <div class="modal-card" style="width:min(500px, 100%);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">📎 Send Media / Document</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-media')">&times;</button>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Select File (Image, Video, Audio, or Document):</label>
+        <input type="file" id="media-file-input" onchange="handleMediaFileSelect(event)">
+      </div>
+      <div id="media-preview-box" style="display:none;background:#06090e;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px;text-align:center;">
+        <img id="media-preview-img" style="max-height:180px;max-width:100%;border-radius:6px;display:none;" alt="Preview">
+        <div id="media-preview-fileinfo" style="font-size:13px;color:var(--text);margin-top:6px;"></div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Caption (Optional):</label>
+        <input type="text" id="media-caption-input" placeholder="Add a caption...">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#fb7185;cursor:pointer;">
+          <input type="checkbox" id="media-viewonce-check">
+          <span>🔥 Send as View Once (Photos / Videos)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#38bdf8;cursor:pointer;">
+          <input type="checkbox" id="media-ptt-check">
+          <span>🎙️ Send Audio as Voice Note (PTT waveform)</span>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-media')">Cancel</button>
+        <button class="btn btn-emerald" id="btn-submit-media" onclick="submitMediaSend()">Send Media &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Send Location -->
+  <div id="modal-location" class="modal-overlay">
+    <div class="modal-card" style="width:min(460px, 100%);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">📍 Send Location Pin</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-location')">&times;</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <button class="btn btn-secondary" style="width:100%;justify-content:center;" onclick="detectCurrentLocation()">
+          🧭 Auto-Detect My Current GPS Location
+        </button>
+        <div id="loc-status" style="font-size:11.5px;color:var(--text-dim);margin-top:4px;text-align:center;"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+        <div>
+          <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Latitude:</label>
+          <input type="number" step="any" id="loc-lat-input" placeholder="e.g. 37.7749">
+        </div>
+        <div>
+          <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Longitude:</label>
+          <input type="number" step="any" id="loc-lng-input" placeholder="e.g. -122.4194">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Place Name (Optional):</label>
+        <input type="text" id="loc-name-input" placeholder="e.g. Headquarters / Coffee Shop">
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Address (Optional):</label>
+        <input type="text" id="loc-address-input" placeholder="e.g. 100 Main St, City, Country">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-location')">Cancel</button>
+        <button class="btn btn-emerald" id="btn-submit-location" onclick="submitLocationSend()">Send Location &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Send Contact -->
+  <div id="modal-contact" class="modal-overlay">
+    <div class="modal-card" style="width:min(440px, 100%);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">👤 Send Contact Card</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-contact')">&times;</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Full Name:</label>
+        <input type="text" id="contact-name-input" placeholder="e.g. John Doe">
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Phone Number:</label>
+        <input type="text" id="contact-phone-input" placeholder="e.g. +1 555 123 4567">
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:4px;">Organization (Optional):</label>
+        <input type="text" id="contact-org-input" placeholder="e.g. Acme Corp">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-contact')">Cancel</button>
+        <button class="btn btn-emerald" id="btn-submit-contact" onclick="submitContactSend()">Send Contact &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Send Sticker -->
+  <div id="modal-sticker" class="modal-overlay">
+    <div class="modal-card" style="width:min(440px, 100%);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">🎨 Create & Send Sticker</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-sticker')">&times;</button>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Upload Image (PNG, JPG, WebP):</label>
+        <input type="file" id="sticker-file-input" accept="image/*" onchange="handleStickerFileSelect(event)">
+      </div>
+      <div id="sticker-preview-box" style="display:none;background:#06090e;border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px;text-align:center;">
+        <img id="sticker-preview-img" style="width:140px;height:140px;object-fit:contain;margin:0 auto;display:block;" alt="Sticker Preview">
+        <div style="font-size:12px;color:#34d399;margin-top:8px;">Ready! Will convert to 512x512 transparent WebP</div>
+      </div>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:18px;line-height:1.4;">
+        Images are processed server-side with Sharp and converted directly into native WhatsApp stickers with transparent borders.
+      </p>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-sticker')">Cancel</button>
+        <button class="btn btn-emerald" id="btn-submit-sticker" onclick="submitStickerSend()">Send Sticker &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Open Direct Chat / JID -->
+  <div id="modal-new-chat" class="modal-overlay">
+    <div class="modal-card" style="width:min(440px, 100%);text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="font-size:18px;margin:0;">💬 Open Direct Conversation</h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-new-chat')">&times;</button>
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Phone Number or WhatsApp JID:</label>
+        <input type="text" id="new-chat-target-input" placeholder="e.g. 15551234567 or 120363...45@g.us" style="font-family:var(--font-mono);">
+        <div style="font-size:11.5px;color:var(--text-dim);margin-top:6px;">
+          Numbers without '@' are automatically formatted as standard WhatsApp user JIDs.
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-new-chat')">Cancel</button>
+        <button class="btn btn-emerald" onclick="submitDirectChatOpen()">Open Chat &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Media Lightbox -->
+  <div id="modal-lightbox" class="modal-overlay" onclick="closeModal('modal-lightbox')">
+    <div style="max-width:90vw;max-height:90vh;display:flex;flex-direction:column;align-items:center;position:relative;" onclick="event.stopPropagation()">
+      <button class="btn-secondary" style="position:absolute;top:-40px;right:0;font-size:20px;border:none;color:white;cursor:pointer;" onclick="closeModal('modal-lightbox')">&times;</button>
+      <img id="lightbox-img" style="max-width:88vw;max-height:85vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.8);object-fit:contain;display:none;">
+      <video id="lightbox-video" controls autoplay style="max-width:88vw;max-height:85vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.8);display:none;"></video>
     </div>
   </div>
 
@@ -1237,15 +1706,75 @@
       }).join('');
     }
 
+    let currentMessages = [];
+    let pendingMediaBase64 = null;
+    let pendingMediaFile = null;
+    let pendingStickerBase64 = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let recordInterval = null;
+    let recordSeconds = 0;
+
+    function openModal(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('active');
+    }
+
+    function closeModal(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('active');
+    }
+
+    function openNewChatModal() {
+      document.getElementById('new-chat-target-input').value = '';
+      openModal('modal-new-chat');
+    }
+
+    function submitDirectChatOpen() {
+      let raw = document.getElementById('new-chat-target-input').value.trim();
+      if (!raw) return;
+      closeModal('modal-new-chat');
+
+      let jid = raw;
+      if (!jid.includes('@')) {
+        const cleaned = raw.replace(/\D/g, '');
+        jid = `${cleaned}@s.whatsapp.net`;
+      }
+
+      const isGroup = jid.endsWith('@g.us');
+      const existing = isGroup
+        ? chatsCache.groups.find(g => g.id === jid)
+        : chatsCache.directChats.find(d => d.id === jid);
+
+      if (!existing) {
+        const item = {
+          id: jid,
+          name: raw,
+          isGroup,
+          phoneNumber: isGroup ? undefined : raw.replace(/\D/g, ''),
+        };
+        if (isGroup) {
+          chatsCache.groups.unshift(item);
+        } else {
+          chatsCache.directChats.unshift(item);
+        }
+        renderChatList();
+      }
+
+      selectChat(jid, isGroup);
+    }
+
     function selectChat(jid, isGroup) {
       const list = isGroup ? chatsCache.groups : chatsCache.directChats;
       selectedChat = list.find(c => c.id === jid) || { id: jid, name: jid, isGroup };
 
       document.getElementById('current-chat-title').textContent = selectedChat.name;
       document.getElementById('current-chat-jid').textContent = selectedChat.id;
+      document.getElementById('current-chat-avatar').textContent = isGroup ? '👥' : '👤';
 
       const noticeBox = document.getElementById('admin-group-notice');
       const bypassWrapper = document.getElementById('bypass-wrapper');
+      const queueWrapper = document.getElementById('queue-wrapper');
 
       if (selectedChat.isGroup && selectedChat.isAnnounce) {
         noticeBox.style.display = 'flex';
@@ -1254,18 +1783,202 @@
           document.getElementById('admin-group-notice-text').innerHTML =
             'This group is set to <strong>Admin-Only</strong>. Good news: This bot <strong>is an Admin</strong> and can send messages directly, or use the temporary bypass toggle below.';
           bypassWrapper.style.display = 'flex';
+          queueWrapper.style.display = 'none';
         } else {
           noticeBox.className = 'admin-notice-box';
           document.getElementById('admin-group-notice-text').innerHTML =
-            'This group is set to <strong>Admin-Only</strong> and this bot is <strong>not an admin</strong>. WhatsApp servers may reject messages sent here unless the bot is promoted to admin.';
+            'This group is set to <strong>Admin-Only</strong> and this bot is <strong>not an admin</strong>. Check <strong>Queue on Mute</strong> to auto-send when opened by group admins.';
           bypassWrapper.style.display = 'none';
+          queueWrapper.style.display = 'flex';
         }
       } else {
         noticeBox.style.display = 'none';
         bypassWrapper.style.display = 'none';
+        queueWrapper.style.display = 'none';
       }
 
       renderChatList();
+      loadMessagesForSelectedChat(true);
+    }
+
+    async function loadMessagesForSelectedChat(forceScroll = false) {
+      if (!selectedChat) return;
+      const historyEl = document.getElementById('chat-session-history');
+      if (forceScroll && currentMessages.length === 0) {
+        historyEl.innerHTML = `<div style="text-align:center;color:var(--text-dim);font-size:13px;padding:30px 0;">Loading conversation history...</div>`;
+      }
+
+      try {
+        const res = await fetch(`/api/chats/${encodeURIComponent(selectedChat.id)}/messages?limit=80`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && Array.isArray(data.messages)) {
+          currentMessages = data.messages;
+          renderMessagesList(forceScroll);
+        }
+      } catch (err) {
+        console.error('Failed to load chat history:', err);
+      }
+    }
+
+    function renderMessagesList(shouldScrollToBottom = false) {
+      const container = document.getElementById('chat-session-history');
+      if (!currentMessages || !currentMessages.length) {
+        container.innerHTML = `
+          <div style="text-align:center;color:var(--text-dim);font-size:13px;padding:40px 0;">
+            No message history recorded yet for this chat.<br>
+            Send a message, voice note, or media below to start interacting.
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = currentMessages.map(msg => renderChatMessageBubble(msg)).join('');
+
+      if (shouldScrollToBottom) {
+        const bodyEl = document.getElementById('chat-view-body-el');
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      }
+    }
+
+    function renderChatMessageBubble(msg) {
+      const isOut = Boolean(msg.fromMe);
+      const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const senderDisplay = msg.senderName || msg.senderNumber || (isOut ? 'You' : 'Sender');
+
+      let badgesHtml = '';
+      if (msg.isViewOnce) {
+        badgesHtml += `<span class="bubble-tag-vo">🔥 View Once</span>`;
+      }
+      if (msg.isDeleted) {
+        badgesHtml += `<span class="bubble-tag-del">🗑️ Deleted Message</span>`;
+      }
+
+      // Media rendering
+      let mediaHtml = '';
+      if (msg.media && msg.media.url) {
+        const kind = msg.media.kind;
+        const url = msg.media.url;
+        if (kind === 'image') {
+          mediaHtml = `<img src="${url}" class="bubble-image-thumb" onclick="openLightbox('${url}', 'image')" alt="Image" loading="lazy">`;
+        } else if (kind === 'video') {
+          mediaHtml = `<video src="${url}" class="bubble-video-thumb" controls></video>`;
+        } else if (kind === 'audio') {
+          mediaHtml = `<audio src="${url}" class="bubble-audio-player" controls preload="metadata"></audio>`;
+        } else if (kind === 'sticker') {
+          mediaHtml = `<img src="${url}" class="bubble-sticker-thumb" alt="Sticker" loading="lazy">`;
+        } else {
+          const fName = escapeHtml(msg.media.fileName || 'Attachment');
+          const fSize = msg.media.size ? `(${Math.round(msg.media.size / 1024)} KB)` : '';
+          mediaHtml = `
+            <a href="${url}" download="${fName}" target="_blank" style="text-decoration:none;">
+              <div class="bubble-card-attachment">
+                <div class="attachment-icon-box">📄</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-weight:600;color:var(--text);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${fName}</div>
+                  <div style="font-size:11px;color:var(--text-dim);">${fSize} &bull; Click to download</div>
+                </div>
+              </div>
+            </a>
+          `;
+        }
+      }
+
+      // Location rendering
+      let locationHtml = '';
+      if (msg.location) {
+        const loc = msg.location;
+        const mapUrl = `https://www.google.com/maps?q=${loc.degreesLatitude},${loc.degreesLongitude}`;
+        locationHtml = `
+          <a href="${mapUrl}" target="_blank" style="text-decoration:none;">
+            <div class="bubble-card-attachment">
+              <div class="attachment-icon-box">📍</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;color:#38bdf8;font-size:13px;">${escapeHtml(loc.name || 'Location Pin')}</div>
+                <div style="font-size:11.5px;color:var(--text);">${escapeHtml(loc.address || `${loc.degreesLatitude.toFixed(4)}, ${loc.degreesLongitude.toFixed(4)}`)}</div>
+                <div style="font-size:10.5px;color:var(--text-dim);margin-top:2px;">View on Google Maps &rarr;</div>
+              </div>
+            </div>
+          </a>
+        `;
+      }
+
+      // Contact rendering
+      let contactHtml = '';
+      if (msg.contact) {
+        const c = msg.contact;
+        contactHtml = `
+          <div class="bubble-card-attachment">
+            <div class="attachment-icon-box">👤</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;color:var(--text);font-size:13px;">${escapeHtml(c.displayName || 'Contact')}</div>
+              <div style="font-size:11.5px;color:var(--text-dim);">WhatsApp vCard Contact</div>
+            </div>
+          </div>
+        `;
+      }
+
+      // Reactions rendering
+      let reactionsHtml = '';
+      if (msg.reactions && Object.keys(msg.reactions).length > 0) {
+        const pills = Object.entries(msg.reactions)
+          .map(([emoji, count]) => `<span>${emoji} ${count > 1 ? count : ''}</span>`)
+          .join(' ');
+        reactionsHtml = `<div class="bubble-reactions-pill">${pills}</div>`;
+      }
+
+      const textContent = msg.text ? formatChatMessageText(msg.text) : '';
+      const revokeBtn = isOut ? `
+        <button class="action-revoke-btn" onclick="revokeChatMessage('${msg.id}', '${msg.senderJid || ''}', true)" title="Delete for everyone">
+          🗑️
+        </button>
+      ` : '';
+
+      return `
+        <div class="chat-bubble-row ${isOut ? 'outgoing' : 'incoming'}" id="msg-row-${escapeHtml(msg.id)}">
+          <div class="bubble-actions-hover">
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '👍', '${msg.senderJid || ''}', ${isOut})" title="Like">👍</button>
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '❤️', '${msg.senderJid || ''}', ${isOut})" title="Love">❤️</button>
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😂', '${msg.senderJid || ''}', ${isOut})" title="Laugh">😂</button>
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😮', '${msg.senderJid || ''}', ${isOut})" title="Wow">😮</button>
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😢', '${msg.senderJid || ''}', ${isOut})" title="Sad">😢</button>
+            <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '🙏', '${msg.senderJid || ''}', ${isOut})" title="Pray">🙏</button>
+            ${revokeBtn}
+          </div>
+          <div class="chat-bubble">
+            ${!isOut && selectedChat && selectedChat.isGroup ? `<div class="bubble-sender"><span>${escapeHtml(senderDisplay)}</span></div>` : ''}
+            ${badgesHtml ? `<div class="bubble-badges">${badgesHtml}</div>` : ''}
+            ${mediaHtml}
+            ${locationHtml}
+            ${contactHtml}
+            ${textContent ? `<div style="white-space:pre-wrap;">${textContent}</div>` : ''}
+            <div class="bubble-meta">
+              <span>${time}</span>
+              ${isOut ? '<span>✓✓</span>' : ''}
+            </div>
+            ${reactionsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    function formatChatMessageText(text) {
+      if (!text) return '';
+      let esc = escapeHtml(text);
+      esc = esc.replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.3);padding:4px 6px;border-radius:4px;font-family:var(--font-mono);font-size:12px;margin:3px 0;">$1</pre>');
+      esc = esc.replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;font-family:var(--font-mono);font-size:12px;">$1</code>');
+      esc = esc.replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>');
+      esc = esc.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+      esc = esc.replace(/~([^~\n]+)~/g, '<del>$1</del>');
+      esc = esc.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" style="color:#38bdf8;text-decoration:underline;">$1</a>');
+      return esc;
+    }
+
+    function handleChatInputKeydown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+      }
     }
 
     async function sendChatMessage() {
@@ -1276,7 +1989,8 @@
       const text = document.getElementById('chat-message-input').value.trim();
       if (!text) return;
 
-      const bypassAdmin = document.getElementById('bypass-admin-check').checked;
+      const bypassAdmin = document.getElementById('bypass-admin-check')?.checked;
+      const queueOnMute = document.getElementById('queue-on-mute-check')?.checked;
       const sendBtn = document.getElementById('btn-send-chat');
       sendBtn.disabled = true;
       sendBtn.innerHTML = 'Sending...';
@@ -1289,12 +2003,17 @@
             jid: selectedChat.id,
             text,
             bypassAdminOnly: bypassAdmin,
+            queueOnMute,
           }),
         });
         const data = await res.json();
         if (data.success) {
           document.getElementById('chat-message-input').value = '';
-          appendSentLog(selectedChat.name, text, data.note);
+          if (data.queued) {
+            alert(`Message Queued!\n${data.note}`);
+          } else {
+            loadMessagesForSelectedChat(true);
+          }
         } else {
           alert(`Send Error: ${data.error}`);
         }
@@ -1302,24 +2021,509 @@
         alert(`Failed to send message: ${err.message}`);
       } finally {
         sendBtn.disabled = false;
-        sendBtn.innerHTML = '<span>Send Message</span><span>&rarr;</span>';
+        sendBtn.innerHTML = '<span>Send</span><span>&rarr;</span>';
       }
     }
 
-    function appendSentLog(chatName, text, note) {
-      const container = document.getElementById('chat-session-history');
-      const timeStr = new Date().toLocaleTimeString();
-      const div = document.createElement('div');
-      div.style.cssText = 'background:var(--card-surface);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:13.5px;';
-      div.innerHTML = `
-        <div style="display:flex;justify-content:space-between;color:var(--text-dim);font-size:11.5px;margin-bottom:4px;">
-          <span>To: <strong>${escapeHtml(chatName)}</strong></span>
-          <span>${timeStr}</span>
-        </div>
-        <div style="color:var(--text);white-space:pre-wrap;">${escapeHtml(text)}</div>
-        ${note ? `<div style="font-size:11.5px;color:#38bdf8;margin-top:4px;">ℹ️ ${escapeHtml(note)}</div>` : ''}
-      `;
-      container.prepend(div);
+    // --- Send Reaction ---
+    async function sendEmojiReaction(messageId, emoji, participant, fromMe) {
+      if (!selectedChat) return;
+      try {
+        await fetch('/api/chats/send-reaction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            messageId,
+            emoji,
+            participant: participant || undefined,
+            fromMe: Boolean(fromMe),
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to send reaction:', err);
+      }
+    }
+
+    // --- Revoke Message ---
+    async function revokeChatMessage(messageId, participant, fromMe) {
+      if (!selectedChat) return;
+      if (!confirm('Are you sure you want to delete this message for everyone?')) return;
+      try {
+        const res = await fetch('/api/chats/delete-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            messageId,
+            participant: participant || undefined,
+            fromMe: Boolean(fromMe),
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadMessagesForSelectedChat(false);
+        } else {
+          alert(`Revocation error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to revoke message: ${err.message}`);
+      }
+    }
+
+    // --- Presence Status ---
+    async function changeChatPresence(presence) {
+      if (!selectedChat || !presence) return;
+      try {
+        await fetch('/api/chats/presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            presence,
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to update presence:', err);
+      }
+    }
+
+    // --- Media Modal & Upload ---
+    function openMediaModal() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+      pendingMediaBase64 = null;
+      pendingMediaFile = null;
+      document.getElementById('media-file-input').value = '';
+      document.getElementById('media-caption-input').value = '';
+      document.getElementById('media-viewonce-check').checked = false;
+      document.getElementById('media-ptt-check').checked = false;
+      document.getElementById('media-preview-box').style.display = 'none';
+      document.getElementById('media-preview-img').style.display = 'none';
+      openModal('modal-media');
+    }
+
+    function handleMediaFileSelect(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      pendingMediaFile = file;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        pendingMediaBase64 = event.target.result;
+        const box = document.getElementById('media-preview-box');
+        const img = document.getElementById('media-preview-img');
+        const info = document.getElementById('media-preview-fileinfo');
+
+        box.style.display = 'block';
+        info.textContent = `${file.name} (${Math.round(file.size / 1024)} KB) - ${file.type || 'file'}`;
+
+        if (file.type.startsWith('image/')) {
+          img.src = pendingMediaBase64;
+          img.style.display = 'inline-block';
+        } else {
+          img.style.display = 'none';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function submitMediaSend() {
+      if (!selectedChat || !pendingMediaBase64 || !pendingMediaFile) {
+        alert('Please select a file to send.');
+        return;
+      }
+
+      const caption = document.getElementById('media-caption-input').value.trim();
+      const viewOnce = document.getElementById('media-viewonce-check').checked;
+      const ptt = document.getElementById('media-ptt-check').checked;
+      const btn = document.getElementById('btn-submit-media');
+
+      let kind = 'document';
+      if (pendingMediaFile.type.startsWith('image/')) kind = 'image';
+      else if (pendingMediaFile.type.startsWith('video/')) kind = 'video';
+      else if (pendingMediaFile.type.startsWith('audio/')) kind = 'audio';
+
+      btn.disabled = true;
+      btn.textContent = 'Uploading & Sending...';
+
+      try {
+        const res = await fetch('/api/chats/send-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            media: pendingMediaBase64,
+            kind,
+            caption: caption || undefined,
+            fileName: pendingMediaFile.name,
+            mimetype: pendingMediaFile.type,
+            viewOnce,
+            ptt,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal('modal-media');
+          loadMessagesForSelectedChat(true);
+        } else {
+          alert(`Failed to send media: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Error sending media: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Media \u2192';
+      }
+    }
+
+    // --- Voice Recording via MediaRecorder API ---
+    async function toggleVoiceRecording() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        stopVoiceRecording(true);
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Audio recording is not supported in this browser environment or requires HTTPS/localhost.');
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioChunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop());
+          clearInterval(recordInterval);
+          document.getElementById('recording-indicator').style.display = 'none';
+
+          if (window._sendAudioNow && audioChunks.length > 0) {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              await sendRecordedVoiceNote(reader.result);
+            };
+            reader.readAsDataURL(audioBlob);
+          }
+          window._sendAudioNow = false;
+        };
+
+        window._sendAudioNow = false;
+        mediaRecorder.start();
+        recordSeconds = 0;
+        document.getElementById('recording-indicator').style.display = 'flex';
+        document.getElementById('record-timer').textContent = '00:00';
+
+        // Notify chat bot is recording
+        changeChatPresence('recording');
+
+        recordInterval = setInterval(() => {
+          recordSeconds++;
+          const m = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
+          const s = String(recordSeconds % 60).padStart(2, '0');
+          document.getElementById('record-timer').textContent = `${m}:${s}`;
+        }, 1000);
+      } catch (err) {
+        alert(`Could not access microphone: ${err.message}`);
+      }
+    }
+
+    function cancelVoiceRecording() {
+      window._sendAudioNow = false;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+      clearInterval(recordInterval);
+      document.getElementById('recording-indicator').style.display = 'none';
+      changeChatPresence('paused');
+    }
+
+    function stopVoiceRecording(send = true) {
+      window._sendAudioNow = send;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    }
+
+    async function sendRecordedVoiceNote(base64Data) {
+      if (!selectedChat) return;
+      try {
+        const res = await fetch('/api/chats/send-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            media: base64Data,
+            kind: 'audio',
+            ptt: true,
+            mimetype: 'audio/ogg; codecs=opus',
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadMessagesForSelectedChat(true);
+        } else {
+          alert(`Voice note delivery failed: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to send voice note: ${err.message}`);
+      }
+    }
+
+    // --- Sticker Modal & Sharp Conversion ---
+    function openStickerModal() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+      pendingStickerBase64 = null;
+      document.getElementById('sticker-file-input').value = '';
+      document.getElementById('sticker-preview-box').style.display = 'none';
+      openModal('modal-sticker');
+    }
+
+    function handleStickerFileSelect(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        pendingStickerBase64 = event.target.result;
+        document.getElementById('sticker-preview-img').src = pendingStickerBase64;
+        document.getElementById('sticker-preview-box').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function submitStickerSend() {
+      if (!selectedChat || !pendingStickerBase64) {
+        alert('Please select an image for sticker conversion.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit-sticker');
+      btn.disabled = true;
+      btn.textContent = 'Converting to WebP & Sending...';
+
+      try {
+        const res = await fetch('/api/chats/send-sticker', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            image: pendingStickerBase64,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal('modal-sticker');
+          loadMessagesForSelectedChat(true);
+        } else {
+          alert(`Failed to send sticker: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Sticker error: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Sticker \u2192';
+      }
+    }
+
+    // --- Location Modal & GPS Auto-detect ---
+    function openLocationModal() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+      document.getElementById('loc-lat-input').value = '';
+      document.getElementById('loc-lng-input').value = '';
+      document.getElementById('loc-name-input').value = '';
+      document.getElementById('loc-address-input').value = '';
+      document.getElementById('loc-status').textContent = '';
+      openModal('modal-location');
+    }
+
+    function detectCurrentLocation() {
+      const status = document.getElementById('loc-status');
+      if (!navigator.geolocation) {
+        status.textContent = 'Geolocation is not supported by your browser.';
+        return;
+      }
+
+      status.textContent = 'Locating via browser GPS...';
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          document.getElementById('loc-lat-input').value = pos.coords.latitude.toFixed(6);
+          document.getElementById('loc-lng-input').value = pos.coords.longitude.toFixed(6);
+          status.textContent = `Coordinates detected (Accuracy: ~${Math.round(pos.coords.accuracy)}m)`;
+        },
+        (err) => {
+          status.textContent = `Location error: ${err.message}`;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+
+    async function submitLocationSend() {
+      if (!selectedChat) return;
+      const lat = parseFloat(document.getElementById('loc-lat-input').value);
+      const lng = parseFloat(document.getElementById('loc-lng-input').value);
+
+      if (isNaN(lat) || isNaN(lng)) {
+        alert('Please provide valid Latitude and Longitude coordinates.');
+        return;
+      }
+
+      const name = document.getElementById('loc-name-input').value.trim();
+      const address = document.getElementById('loc-address-input').value.trim();
+      const btn = document.getElementById('btn-submit-location');
+
+      btn.disabled = true;
+      btn.textContent = 'Sending Pin...';
+
+      try {
+        const res = await fetch('/api/chats/send-location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            degreesLatitude: lat,
+            degreesLongitude: lng,
+            name: name || undefined,
+            address: address || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal('modal-location');
+          loadMessagesForSelectedChat(true);
+        } else {
+          alert(`Location error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to send location: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Location \u2192';
+      }
+    }
+
+    // --- Contact Modal & vCard ---
+    function openContactModal() {
+      if (!selectedChat) {
+        alert('Please select a chat or group first.');
+        return;
+      }
+      document.getElementById('contact-name-input').value = '';
+      document.getElementById('contact-phone-input').value = '';
+      document.getElementById('contact-org-input').value = '';
+      openModal('modal-contact');
+    }
+
+    async function submitContactSend() {
+      if (!selectedChat) return;
+      const displayName = document.getElementById('contact-name-input').value.trim();
+      const phoneNumber = document.getElementById('contact-phone-input').value.trim();
+      const organization = document.getElementById('contact-org-input').value.trim();
+
+      if (!displayName || !phoneNumber) {
+        alert('Please provide both Display Name and Phone Number.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit-contact');
+      btn.disabled = true;
+      btn.textContent = 'Sending Contact...';
+
+      try {
+        const res = await fetch('/api/chats/send-contact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jid: selectedChat.id,
+            displayName,
+            phoneNumber,
+            organization: organization || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal('modal-contact');
+          loadMessagesForSelectedChat(true);
+        } else {
+          alert(`Contact error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to send contact: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Contact \u2192';
+      }
+    }
+
+    // --- Lightbox Viewer ---
+    function openLightbox(url, type = 'image') {
+      const img = document.getElementById('lightbox-img');
+      const vid = document.getElementById('lightbox-video');
+
+      if (type === 'video') {
+        img.style.display = 'none';
+        vid.src = url;
+        vid.style.display = 'block';
+      } else {
+        vid.style.display = 'none';
+        img.src = url;
+        img.style.display = 'block';
+      }
+      openModal('modal-lightbox');
+    }
+
+    // --- Export Chat History ---
+    function exportChatHistory() {
+      if (!selectedChat || !currentMessages.length) {
+        alert('No messages to export for this conversation.');
+        return;
+      }
+
+      const lines = [
+        `WhatsApp Chat Transcript - ${selectedChat.name} (${selectedChat.id})`,
+        `Exported at: ${new Date().toLocaleString()}`,
+        `--------------------------------------------------------------------------------`,
+        '',
+      ];
+
+      for (const m of currentMessages) {
+        const time = m.timestamp ? new Date(m.timestamp).toLocaleString() : 'Unknown Time';
+        const sender = m.fromMe ? 'You' : (m.senderName || m.senderNumber || 'Sender');
+        let line = `[${time}] ${sender}: `;
+        if (m.text) line += m.text;
+        if (m.media) line += ` [MEDIA: ${m.media.kind} - ${m.media.fileName || m.media.mimetype}]`;
+        if (m.location) line += ` [LOCATION: ${m.location.name || ''} (${m.location.degreesLatitude}, ${m.location.degreesLongitude})]`;
+        if (m.contact) line += ` [CONTACT: ${m.contact.displayName}]`;
+        if (m.isDeleted) line += ` (DELETED)`;
+        if (m.isViewOnce) line += ` (VIEW ONCE)`;
+        lines.push(line);
+      }
+
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `chat-${selectedChat.id.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now()}.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
     }
 
     // -------------------------------------------------------------------------
@@ -1598,6 +2802,39 @@
         const time = new Date().toLocaleTimeString();
         log.innerHTML += `\n[${time}] ${escapeHtml(JSON.stringify(activity))}`;
         log.scrollTop = log.scrollHeight;
+
+        if (activity && activity.type === 'queue:drained') {
+          if (selectedChat && selectedChat.id === activity.groupJid) {
+            loadMessagesForSelectedChat(true);
+          }
+        }
+      });
+
+      socket.on('chat:message', (msg) => {
+        if (selectedChat && msg.chatJid === selectedChat.id) {
+          const existingIdx = currentMessages.findIndex((m) => m.id === msg.id);
+          if (existingIdx !== -1) {
+            currentMessages[existingIdx] = msg;
+          } else {
+            currentMessages.push(msg);
+          }
+          const bodyEl = document.getElementById('chat-view-body-el');
+          const isAtBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 140;
+          renderMessagesList(isAtBottom);
+        }
+      });
+
+      socket.on('chat:reaction', (data) => {
+        if (selectedChat && data.chatJid === selectedChat.id) {
+          const target = currentMessages.find((m) => m.id === data.messageId);
+          if (target) {
+            if (!target.reactions) target.reactions = {};
+            if (data.emoji) {
+              target.reactions[data.emoji] = (target.reactions[data.emoji] || 0) + 1;
+            }
+            renderMessagesList(false);
+          }
+        }
       });
     }
 

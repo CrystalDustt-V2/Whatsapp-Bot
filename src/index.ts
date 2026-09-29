@@ -102,6 +102,13 @@ async function main() {
         }
 
         for (const msg of messages) {
+          // Ingest all messages into admin dashboard live buffer & stream
+          try {
+            apiServer.handleIncomingMessage(msg);
+          } catch (dashErr) {
+            logger.debug({ dashErr }, 'Failed to pass message to dashboard');
+          }
+
           const fromMe = Boolean(msg.key.fromMe);
           const shouldHandle = fromMe
             ? config.HANDLE_SELF_MESSAGES
@@ -116,6 +123,14 @@ async function main() {
           }
 
           await messageHandler.handleMessage(msg);
+        }
+      });
+
+      socket.ev.on('groups.update', (updates) => {
+        try {
+          apiServer.handleGroupsUpdate(updates);
+        } catch (grpErr) {
+          logger.debug({ grpErr }, 'Failed to handle groups update in dashboard');
         }
       });
 
