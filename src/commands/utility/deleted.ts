@@ -138,7 +138,7 @@ export function formatList(records: DeletedMessageRecord[], title = 'Recovered d
   const lines = records.map((record, index) => {
     const isVo = Boolean(record.viewOnce || record.media?.viewOnce || record.messageType?.startsWith('viewOnce:'));
     const chatPrefix = showChat ? `${formatChatLabel(record.chatJid)} ` : '';
-    const media = record.media ? ` [${isVo ? 'view-once ' : ''}${record.media.kind}]` : '';
+    const media = record.media ? ` [${isVo ? 'view-once ' : ''}${record.media.kind}]` : (isVo ? ' [view-once]' : '');
     return `${index + 1}. ${chatPrefix}${record.senderName}${media} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
   });
 

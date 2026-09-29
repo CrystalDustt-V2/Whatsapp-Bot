@@ -215,7 +215,7 @@ function loadState(): RecoveryState {
     stateCache = {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       deleted: Array.isArray(parsed.deleted) ? parsed.deleted : [],
-      viewOnce: Array.isArray(parsed.viewOnce) ? parsed.viewOnce.filter((item) => Boolean(item.media)) : [],
+      viewOnce: Array.isArray(parsed.viewOnce) ? parsed.viewOnce : [],
     };
     return stateCache;
   } catch {
@@ -228,7 +228,7 @@ function saveState(state: RecoveryState): void {
   const nextState = {
     messages: state.messages.slice(-maxMessages()),
     deleted: state.deleted.slice(-maxDeleted()),
-    viewOnce: (state.viewOnce || []).filter((item) => Boolean(item.media)).slice(-maxDeleted()),
+    viewOnce: (state.viewOnce || []).slice(-maxDeleted()),
   };
   removeStaleMediaFiles(state, nextState);
   stateCache = nextState;
@@ -711,8 +711,8 @@ export async function recordRecoverableMessage(
 
   let savedViewOnceRecord: DeletedMessageRecord | undefined;
 
-  // View-once messages disappear upon viewing; save them to dedicated viewOnce records ONLY if media was successfully captured
-  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce && media) {
+  // View-once messages disappear upon viewing; save them to dedicated viewOnce records
+  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce) {
     savedViewOnceRecord = {
       ...next,
       deletedAt: timestampIso(timestampSeconds),
@@ -728,7 +728,11 @@ export async function recordRecoverableMessage(
       (item) => item.chatJid === chatJid && (item.messageId === id || baseMessageId(item.messageId) === baseId)
     );
     if (existingIndex >= 0) {
-      state.viewOnce[existingIndex] = { ...state.viewOnce[existingIndex], ...savedViewOnceRecord };
+      state.viewOnce[existingIndex] = {
+        ...state.viewOnce[existingIndex],
+        ...savedViewOnceRecord,
+        media: savedViewOnceRecord.media || state.viewOnce[existingIndex].media,
+      };
     } else {
       state.viewOnce.push(savedViewOnceRecord);
     }
@@ -1284,8 +1288,6 @@ export function getAllDeletedMessages(includeViewOnce = true): DeletedMessageRec
   }
 
   for (const item of vo) {
-    // Only include view-once records that actually have media
-    if (!item.media) continue;
     if (IGNORED_MESSAGE_TYPES.has(item.messageType)) continue;
 
     const baseKey = `${item.chatJid}:${baseMessageId(item.messageId)}`;
@@ -1324,7 +1326,7 @@ export function listViewOnceMessages(chatJid?: string, limit = 30): DeletedMessa
   const isAll = !chatJid || chatJid === 'all' || chatJid === 'global';
   const seen = new Set<string>();
   const list = (state.viewOnce || []).filter((item) => {
-    if (!item.media) return false;
+    if (IGNORED_MESSAGE_TYPES.has(item.messageType)) return false;
     if (!isAll && item.chatJid !== chatJid) return false;
     const baseKey = `${item.chatJid}:${baseMessageId(item.messageId)}`;
     if (seen.has(baseKey)) return false;

@@ -169,7 +169,7 @@ export const ViewOnceCommand: Command = {
       }
 
       const lines = chatRecords.map((record, index) => {
-        const mediaTag = record.media ? ` [${record.media.kind}]` : '';
+        const mediaTag = record.media ? ` [${record.media.kind}]` : ' [view-once]';
         return `${index + 1}. ${record.senderName}${mediaTag} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
       });
 
@@ -220,7 +220,7 @@ export const ViewOnceCommand: Command = {
       const lines = pageRecords.map((record, index) => {
         const globalIndex = startIndex + index + 1;
         const chatPrefix = `${formatChatLabel(record.chatJid)} `;
-        const mediaTag = record.media ? ` [${record.media.kind}]` : '';
+        const mediaTag = record.media ? ` [${record.media.kind}]` : ' [view-once]';
         return `${globalIndex}. ${chatPrefix}${record.senderName}${mediaTag} - ${preview(record.text)} (${formatTime(record.deletedAt)})`;
       });
 
@@ -266,18 +266,8 @@ export const ViewOnceCommand: Command = {
       return;
     }
 
-    // Verify media buffer is available
+    // Attempt deep resolution of media buffer (siblings, local disk, MEGA cloud)
     const buffer = await readDeletedMessageMedia(selectedRecord);
-    if (!buffer || !selectedRecord.media) {
-      await ctx.reply(
-        `❌ *View-once media #${targetIndex} could not be retrieved*\n` +
-        `From: ${selectedRecord.senderName} (${formatTime(selectedRecord.timestamp)})\n\n` +
-        `⚠️ *Reason:* The media bytes were withheld by WhatsApp server from companion devices on arrival.\n` +
-        `💡 *How to unlock:* Open the chat where this message was sent, reply directly to the view-once message, and type *${config.BOT_PREFIX}vo*.`
-      );
-      return;
-    }
-
     const sendToDm = arg1 === 'dm' || arg1 === 'private';
     const ownerNumber = config.OWNER_NUMBER?.replace(/\D/g, '');
     const botNumber = ctx.socket.user?.id?.split(':')[0]?.replace(/\D/g, '');
@@ -285,20 +275,40 @@ export const ViewOnceCommand: Command = {
 
     const formatted = formatRecord(selectedRecord, targetIndex, true);
 
-    if (sendToDm && ownerJid) {
-      const dmCtx = {
-        ...ctx,
-        message: {
-          ...ctx.message,
-          key: { ...ctx.message.key, remoteJid: ownerJid },
-        },
-      };
-      await sendRecoveredMedia(dmCtx, selectedRecord, formatted);
-      await ctx.reply(`✅ Restored view-once media sent to your private chat.`);
+    if (buffer) {
+      if (!selectedRecord.media) {
+        selectedRecord.media = {
+          kind: 'image',
+          mimetype: 'image/jpeg',
+          extension: 'jpg',
+          fileName: `vo-${selectedRecord.messageId.replace(/[^a-zA-Z0-9_-]/g, '_')}.jpg`,
+          size: buffer.length,
+          viewOnce: true,
+        };
+      }
+
+      if (sendToDm && ownerJid) {
+        const dmCtx = {
+          ...ctx,
+          message: {
+            ...ctx.message,
+            key: { ...ctx.message.key, remoteJid: ownerJid },
+          },
+        };
+        await sendRecoveredMedia(dmCtx, selectedRecord, formatted);
+        await ctx.reply(`✅ Restored view-once media sent to your private chat.`);
+        return;
+      }
+
+      await sendRecoveredMedia(ctx, selectedRecord, formatted);
       return;
     }
 
-    await sendRecoveredMedia(ctx, selectedRecord, formatted);
+    await ctx.reply(
+      `${formatted}\n\n` +
+      `⚠️ *Media not downloaded:* WhatsApp withheld the media bytes from companion devices on arrival.\n` +
+      `💡 *How to unlock:* Open the chat on your phone, reply directly to this view-once message, and type *${config.BOT_PREFIX}vo*.`
+    );
   },
 };
 
