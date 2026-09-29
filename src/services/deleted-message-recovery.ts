@@ -215,7 +215,7 @@ function loadState(): RecoveryState {
     stateCache = {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       deleted: Array.isArray(parsed.deleted) ? parsed.deleted : [],
-      viewOnce: Array.isArray(parsed.viewOnce) ? parsed.viewOnce : [],
+      viewOnce: Array.isArray(parsed.viewOnce) ? parsed.viewOnce.filter((item) => Boolean(item.media)) : [],
     };
     return stateCache;
   } catch {
@@ -228,7 +228,7 @@ function saveState(state: RecoveryState): void {
   const nextState = {
     messages: state.messages.slice(-maxMessages()),
     deleted: state.deleted.slice(-maxDeleted()),
-    viewOnce: (state.viewOnce || []).slice(-maxDeleted()),
+    viewOnce: (state.viewOnce || []).filter((item) => Boolean(item.media)).slice(-maxDeleted()),
   };
   removeStaleMediaFiles(state, nextState);
   stateCache = nextState;
@@ -579,6 +579,25 @@ function timestampIso(timestampSeconds: number): string {
   return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())}T${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}+08:00`;
 }
 
+export const IGNORED_MESSAGE_TYPES = new Set([
+  'senderKeyDistributionMessage',
+  'protocolMessage',
+  'reactionMessage',
+  'pollUpdateMessage',
+  'messageContextInfo',
+  'keepInChatMessage',
+  'pinInChatMessage',
+  'keyExchangeMessage',
+  'bcallMessage',
+  'requestPhoneNumberMessage',
+  'none',
+  'unknown',
+]);
+
+export function baseMessageId(id?: string | null): string {
+  return (id || '').replace(/-\d+$/, '');
+}
+
 function sameStoredMessage(message: RecoverableMessage, keyId: string): boolean {
   return `${message.chatJid}:${message.messageId}` === keyId;
 }
@@ -587,17 +606,23 @@ function findStoredMessage(state: RecoveryState, key: proto.IMessageKey): Recove
   const keyId = messageIdFromKey(key);
   if (!keyId) return null;
 
+  const baseId = baseMessageId(key.id);
+
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const item = state.messages[index];
     if (sameStoredMessage(item, keyId)) return item;
+    if (baseId && item.chatJid === key.remoteJid && baseMessageId(item.messageId) === baseId) {
+      return item;
+    }
   }
 
   return null;
 }
 
 function alreadyDeleted(state: RecoveryState, stored: RecoverableMessage): boolean {
+  const baseId = baseMessageId(stored.messageId);
   return state.deleted.some(
-    (item) => item.chatJid === stored.chatJid && item.messageId === stored.messageId
+    (item) => item.chatJid === stored.chatJid && (item.messageId === stored.messageId || (baseId && baseMessageId(item.messageId) === baseId))
   );
 }
 
@@ -618,6 +643,12 @@ export async function recordRecoverableMessage(
 
   const isKeyViewOnce = Boolean((message.key as any)?.isViewOnce || (message as any)?.isViewOnce);
   const rawType = messageType(message.message);
+
+  // Skip protocol / internal handshake messages
+  if (IGNORED_MESSAGE_TYPES.has(rawType)) {
+    return undefined;
+  }
+
   const type = rawType.startsWith('viewOnce:') ? rawType : (isKeyViewOnce ? 'viewOnce:media' : rawType);
   const state = loadState();
   let media: RecoverableMediaRecord | undefined;
@@ -625,6 +656,17 @@ export async function recordRecoverableMessage(
     media = await downloadRecoverableMedia(message, state, socket);
   } catch (err) {
     logger.warn({ err, messageId: id, chatJid }, 'Could not cache recoverable media');
+  }
+
+  // If this message arrived without media, check if a sibling part (e.g. ID-1) already has media
+  if (!media && id) {
+    const baseId = baseMessageId(id);
+    const existing = [...(state.viewOnce || []), ...state.messages].find(
+      (m) => m.chatJid === chatJid && baseMessageId(m.messageId) === baseId && m.media
+    );
+    if (existing?.media) {
+      media = existing.media;
+    }
   }
 
   const isViewOnce = Boolean(type.startsWith('viewOnce:') || media?.viewOnce || isKeyViewOnce);
@@ -669,8 +711,8 @@ export async function recordRecoverableMessage(
 
   let savedViewOnceRecord: DeletedMessageRecord | undefined;
 
-  // View-once messages disappear upon viewing; save them to dedicated viewOnce records (and deleted-media storage)
-  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce) {
+  // View-once messages disappear upon viewing; save them to dedicated viewOnce records ONLY if media was successfully captured
+  if (config.VIEW_ONCE_SAVER_ENABLED && isViewOnce && media) {
     savedViewOnceRecord = {
       ...next,
       deletedAt: timestampIso(timestampSeconds),
@@ -681,8 +723,9 @@ export async function recordRecoverableMessage(
     };
 
     if (!state.viewOnce) state.viewOnce = [];
+    const baseId = baseMessageId(id);
     const existingIndex = state.viewOnce.findIndex(
-      (item) => item.chatJid === savedViewOnceRecord!.chatJid && item.messageId === savedViewOnceRecord!.messageId
+      (item) => item.chatJid === chatJid && (item.messageId === id || baseMessageId(item.messageId) === baseId)
     );
     if (existingIndex >= 0) {
       state.viewOnce[existingIndex] = { ...state.viewOnce[existingIndex], ...savedViewOnceRecord };
@@ -808,11 +851,17 @@ export async function readDeletedMessageMedia(record: {
   // 4. If media buffer is still not resolved, attempt deep search by messageId
   if (record.messageId) {
     const cleanId = safeFilePart(record.messageId);
+    const baseId = safeFilePart(baseMessageId(record.messageId));
 
     // 4a. Check other recorded messages (messages, deleted, viewOnce) for a matching media record
     const state = loadState();
     const sibling = [...(state.viewOnce || []), ...state.deleted, ...state.messages].find(
-      (m) => m.messageId === record.messageId && m.media && m !== record
+      (m) =>
+        (m.messageId === record.messageId ||
+          (baseId && baseMessageId(m.messageId) === baseId) ||
+          (baseId && m.messageId.includes(baseId))) &&
+        m.media &&
+        m !== record
     );
     if (sibling?.media) {
       const siblingBuf = await readDeletedMessageMedia({ media: sibling.media });
@@ -822,11 +871,11 @@ export async function readDeletedMessageMedia(record: {
       }
     }
 
-    // 4b. Check local mediaDir for any file matching cleanId
+    // 4b. Check local mediaDir for any file matching cleanId or baseId
     try {
       if (fs.existsSync(mediaDir)) {
         const files = fs.readdirSync(mediaDir);
-        const match = files.find((f) => f.includes(cleanId));
+        const match = files.find((f) => f.includes(cleanId) || (baseId && f.includes(baseId)));
         if (match) {
           const directPath = path.join(mediaDir, match);
           const buf = fs.readFileSync(directPath);
@@ -861,10 +910,12 @@ export async function readDeletedMessageMedia(record: {
       logger.warn({ err, messageId: record.messageId }, 'Error scanning local mediaDir for messageId');
     }
 
-    // 4c. Check MEGA cloud storage by searching for cleanId pattern
+    // 4c. Check MEGA cloud storage by searching for cleanId or baseId pattern
     if (config.DELETED_MESSAGE_MEDIA_STORAGE === 'mega') {
       try {
-        const megaMatch = await findMegaFileByNamePattern(cleanId);
+        const megaMatch =
+          (await findMegaFileByNamePattern(cleanId)) ||
+          (baseId ? await findMegaFileByNamePattern(baseId) : null);
         if (megaMatch) {
           const buf = await downloadMegaFile(megaMatch.nodeId);
           const ext = path.extname(megaMatch.name).slice(1).toLowerCase();
@@ -1100,23 +1151,30 @@ export async function downloadAndCacheQuotedMedia(
 
 export function findStoredMessageById(chatJid: string, messageId: string): RecoverableMessage | DeletedMessageRecord | null {
   const state = loadState();
-  let found: RecoverableMessage | DeletedMessageRecord | undefined;
+  const baseId = baseMessageId(messageId);
+  const all = [...(state.viewOnce || []), ...state.deleted, ...state.messages];
 
   // 1. Exact match with chatJid
-  found = (state.viewOnce || []).find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
-  if (found) return found;
-  found = state.deleted.find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
-  if (found) return found;
-  found = state.messages.find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
+  let found = all.find((m) => (m.chatJid === chatJid || !chatJid) && m.messageId === messageId);
   if (found) return found;
 
-  // 2. Global match by messageId across all chats
-  found = (state.viewOnce || []).find((m) => m.messageId === messageId);
+  // 2. Base ID match with chatJid
+  if (baseId) {
+    found = all.find((m) => (m.chatJid === chatJid || !chatJid) && baseMessageId(m.messageId) === baseId);
+    if (found) return found;
+  }
+
+  // 3. Global exact match across all chats
+  found = all.find((m) => m.messageId === messageId);
   if (found) return found;
-  found = state.deleted.find((m) => m.messageId === messageId);
-  if (found) return found;
-  found = state.messages.find((m) => m.messageId === messageId);
-  return found || null;
+
+  // 4. Global base ID match across all chats
+  if (baseId) {
+    found = all.find((m) => baseMessageId(m.messageId) === baseId);
+    if (found) return found;
+  }
+
+  return null;
 }
 
 export async function cacheAndStoreMedia(
@@ -1163,16 +1221,22 @@ export async function cacheAndStoreMedia(
     deletedByNumber: sender.phoneNumber,
   };
 
+  const baseId = baseMessageId(id);
+
   if (viewOnce) {
     if (!state.viewOnce) state.viewOnce = [];
-    const existingIndex = state.viewOnce.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+    const existingIndex = state.viewOnce.findIndex(
+      (item) => item.chatJid === chatJid && (item.messageId === id || baseMessageId(item.messageId) === baseId)
+    );
     if (existingIndex >= 0) {
       state.viewOnce[existingIndex] = record;
     } else {
       state.viewOnce.push(record);
     }
   } else {
-    const existingIndex = state.deleted.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+    const existingIndex = state.deleted.findIndex(
+      (item) => item.chatJid === chatJid && (item.messageId === id || baseMessageId(item.messageId) === baseId)
+    );
     if (existingIndex >= 0) {
       state.deleted[existingIndex] = record;
     } else {
@@ -1180,7 +1244,9 @@ export async function cacheAndStoreMedia(
     }
   }
 
-  const msgIndex = state.messages.findIndex((item) => item.chatJid === chatJid && item.messageId === id);
+  const msgIndex = state.messages.findIndex(
+    (item) => item.chatJid === chatJid && (item.messageId === id || baseMessageId(item.messageId) === baseId)
+  );
   if (msgIndex >= 0) {
     state.messages[msgIndex] = { ...state.messages[msgIndex], media, viewOnce };
   } else {
@@ -1209,15 +1275,22 @@ export function getAllDeletedMessages(includeViewOnce = true): DeletedMessageRec
   const combined: DeletedMessageRecord[] = [];
 
   for (const item of deleted) {
-    const key = `${item.chatJid}:${item.messageId}`;
-    seen.add(key);
+    if (IGNORED_MESSAGE_TYPES.has(item.messageType)) continue;
+    if (!item.text && !item.media) continue;
+
+    const baseKey = `${item.chatJid}:${baseMessageId(item.messageId)}`;
+    seen.add(baseKey);
     combined.push(item);
   }
 
   for (const item of vo) {
-    const key = `${item.chatJid}:${item.messageId}`;
-    if (!seen.has(key)) {
-      seen.add(key);
+    // Only include view-once records that actually have media
+    if (!item.media) continue;
+    if (IGNORED_MESSAGE_TYPES.has(item.messageType)) continue;
+
+    const baseKey = `${item.chatJid}:${baseMessageId(item.messageId)}`;
+    if (!seen.has(baseKey)) {
+      seen.add(baseKey);
       combined.push(item);
     }
   }
@@ -1249,8 +1322,14 @@ export function listViewOnceMessages(chatJid?: string, limit = 30): DeletedMessa
   if (!config.VIEW_ONCE_SAVER_ENABLED) return [];
   const state = loadState();
   const isAll = !chatJid || chatJid === 'all' || chatJid === 'global';
+  const seen = new Set<string>();
   const list = (state.viewOnce || []).filter((item) => {
-    return isAll || item.chatJid === chatJid;
+    if (!item.media) return false;
+    if (!isAll && item.chatJid !== chatJid) return false;
+    const baseKey = `${item.chatJid}:${baseMessageId(item.messageId)}`;
+    if (seen.has(baseKey)) return false;
+    seen.add(baseKey);
+    return true;
   });
   return list.slice(-boundedNumber(limit, 30, 1, 500)).reverse();
 }

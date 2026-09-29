@@ -48,6 +48,7 @@ export function isOwnerOrSelf(ctx: BotContext): boolean {
   const senderJid = ctx.sender.jid || '';
   const ownerNumber = config.OWNER_NUMBER?.replace(/\D/g, '') || '';
   const botNumber = ctx.socket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '';
+  const botLid = (ctx.socket.user as any)?.lid?.split(':')[0]?.replace(/\D/g, '') || '';
 
   if (ownerNumber && (senderNumber === ownerNumber || senderJid.includes(ownerNumber))) {
     return true;
@@ -55,8 +56,54 @@ export function isOwnerOrSelf(ctx: BotContext): boolean {
   if (botNumber && (senderNumber === botNumber || senderJid.includes(botNumber))) {
     return true;
   }
+  if (botLid && (senderNumber === botLid || senderJid.includes(botLid))) {
+    return true;
+  }
 
   return false;
+}
+
+type ListedSnapshot = {
+  records: Map<number, DeletedMessageRecord>;
+  timestamp: number;
+};
+const listingSnapshotCache = new Map<string, ListedSnapshot>();
+const SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+
+export function saveListingSnapshot(
+  chatJid: string,
+  senderJid: string,
+  pageRecords: DeletedMessageRecord[],
+  startIndex: number
+): void {
+  const records = new Map<number, DeletedMessageRecord>();
+  pageRecords.forEach((record, index) => {
+    records.set(startIndex + index + 1, record);
+  });
+  const snapshot: ListedSnapshot = { records, timestamp: Date.now() };
+  if (chatJid) listingSnapshotCache.set(chatJid, snapshot);
+  if (senderJid && senderJid !== chatJid) listingSnapshotCache.set(senderJid, snapshot);
+}
+
+export function getRecordFromListingSnapshot(
+  chatJid: string,
+  senderJid: string,
+  index: number
+): DeletedMessageRecord | null {
+  const now = Date.now();
+  for (const key of [chatJid, senderJid]) {
+    if (!key) continue;
+    const snapshot = listingSnapshotCache.get(key);
+    if (snapshot) {
+      if (now - snapshot.timestamp > SNAPSHOT_TTL_MS) {
+        listingSnapshotCache.delete(key);
+      } else {
+        const found = snapshot.records.get(index);
+        if (found) return found;
+      }
+    }
+  }
+  return null;
 }
 
 export function formatRecord(record: DeletedMessageRecord, index: number, showChat = false): string {
@@ -243,11 +290,14 @@ export const DeletedMessageCommand: Command = {
 
         const voIndex = Number(arg1);
         if (Number.isInteger(voIndex) && voIndex >= 1 && arg1 && !['list', 'all', 'recent'].includes(arg1)) {
-          if (voIndex > totalVo) {
+          const record =
+            getRecordFromListingSnapshot(currentChatJid, ctx.sender.jid, voIndex) ||
+            allVo[voIndex - 1];
+
+          if (!record) {
             await ctx.reply(`❌ Pick a view-once number from 1 to ${totalVo}, or use *${config.BOT_PREFIX}deleted vo list*.`);
             return;
           }
-          const record = allVo[voIndex - 1];
           const formatted = formatRecord(record, voIndex, true);
           await sendRecoveredMedia(ctx, record, formatted);
           return;
@@ -265,6 +315,7 @@ export const DeletedMessageCommand: Command = {
 
         const startIndex = (page - 1) * PAGE_SIZE;
         const pageRecords = allVo.slice(startIndex, startIndex + PAGE_SIZE);
+        saveListingSnapshot(currentChatJid, ctx.sender.jid, pageRecords, startIndex);
 
         const lines = pageRecords.map((record, index) => {
           const globalIndex = startIndex + index + 1;
@@ -320,6 +371,7 @@ export const DeletedMessageCommand: Command = {
 
         const startIndex = (page - 1) * PAGE_SIZE;
         const pageRecords = allRecords.slice(startIndex, startIndex + PAGE_SIZE);
+        saveListingSnapshot(currentChatJid, ctx.sender.jid, pageRecords, startIndex);
 
         const lines = pageRecords.map((record, index) => {
           const globalIndex = startIndex + index + 1;
@@ -346,14 +398,24 @@ export const DeletedMessageCommand: Command = {
 
       // 4. Owner subcommand: .deleted <number>
       const globalIndex = Number(arg0);
-      if (!Number.isInteger(globalIndex) || globalIndex < 1 || globalIndex > totalCount) {
+      if (!Number.isInteger(globalIndex) || globalIndex < 1) {
         await ctx.reply(
           `Pick a number from 1 to ${totalCount}, or use *${config.BOT_PREFIX}deleted list* to browse pages.`
         );
         return;
       }
 
-      const record = allRecords[globalIndex - 1];
+      const record =
+        getRecordFromListingSnapshot(currentChatJid, ctx.sender.jid, globalIndex) ||
+        allRecords[globalIndex - 1];
+
+      if (!record) {
+        await ctx.reply(
+          `Pick a number from 1 to ${totalCount}, or use *${config.BOT_PREFIX}deleted list* to browse pages.`
+        );
+        return;
+      }
+
       const formatted = formatRecord(record, globalIndex, true);
       await sendRecoveredMedia(ctx, record, formatted);
       return;
@@ -374,17 +436,26 @@ export const DeletedMessageCommand: Command = {
     }
 
     if (!arg0 || arg0 === 'list' || arg0 === 'recent') {
+      saveListingSnapshot(currentChatJid, ctx.sender.jid, localRecords, 0);
       await ctx.reply(formatList(localRecords, 'Recovered deleted messages (This Chat)', false));
       return;
     }
 
     const localIndex = Number(arg0);
-    if (!Number.isInteger(localIndex) || localIndex < 1 || localIndex > localRecords.length) {
+    if (!Number.isInteger(localIndex) || localIndex < 1) {
       await ctx.reply(`Pick a number from 1 to ${localRecords.length}, or use *${config.BOT_PREFIX}deleted list*.`);
       return;
     }
 
-    const record = localRecords[localIndex - 1];
+    const record =
+      getRecordFromListingSnapshot(currentChatJid, ctx.sender.jid, localIndex) ||
+      localRecords[localIndex - 1];
+
+    if (!record) {
+      await ctx.reply(`Pick a number from 1 to ${localRecords.length}, or use *${config.BOT_PREFIX}deleted list*.`);
+      return;
+    }
+
     const formatted = formatRecord(record, localIndex, false);
     await sendRecoveredMedia(ctx, record, formatted);
   },

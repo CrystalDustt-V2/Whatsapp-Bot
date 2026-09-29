@@ -14,6 +14,8 @@ import {
   formatRecord,
   isOwnerOrSelf,
   sendRecoveredMedia,
+  saveListingSnapshot,
+  getRecordFromListingSnapshot,
 } from './deleted';
 
 const PAGE_SIZE = 25;
@@ -61,6 +63,25 @@ export const ViewOnceCommand: Command = {
     // =========================================================================
     const contextInfo = getQuotedContextInfo(ctx.message.message);
     if (contextInfo?.quotedMessage || contextInfo?.stanzaId) {
+      const quotedStanzaId = contextInfo.stanzaId;
+      if (quotedStanzaId) {
+        const stored = findStoredMessageById(currentChatJid, quotedStanzaId);
+        if (stored && stored.media) {
+          const buffer = await readDeletedMessageMedia(stored);
+          if (buffer) {
+            const formatted =
+              `👁️ *[VIEW-ONCE RESTORED]*\n` +
+              `From: ${stored.senderName}${stored.senderNumber ? ` (${stored.senderNumber})` : ''}\n` +
+              `Type: ${stored.messageType}\n` +
+              `Saved: ${formatTime((stored as any).deletedAt || stored.timestamp)}\n\n` +
+              `${stored.text || ''}`;
+
+            await sendRecoveredMedia(ctx, stored as DeletedMessageRecord, formatted.trim());
+            return;
+          }
+        }
+      }
+
       await ctx.reply('⏳ Decrypting view-once media from quoted message...');
       const savedRecord = await downloadAndCacheQuotedMedia(ctx.socket, contextInfo, currentChatJid, ctx.sender);
 
@@ -194,6 +215,7 @@ export const ViewOnceCommand: Command = {
 
       const startIndex = (page - 1) * PAGE_SIZE;
       const pageRecords = records.slice(startIndex, startIndex + PAGE_SIZE);
+      saveListingSnapshot(currentChatJid, ctx.sender.jid, pageRecords, startIndex);
 
       const lines = pageRecords.map((record, index) => {
         const globalIndex = startIndex + index + 1;
@@ -224,10 +246,34 @@ export const ViewOnceCommand: Command = {
     // CASE 4: RETRIEVE SPECIFIC NUMBER (.vo <number> [dm])
     // =========================================================================
     const targetIndex = Number(arg0);
-    if (!Number.isInteger(targetIndex) || targetIndex < 1 || targetIndex > totalCount) {
+    if (!Number.isInteger(targetIndex) || targetIndex < 1) {
       await ctx.reply(
         `❌ Pick a number from 1 to ${totalCount}, or use *${config.BOT_PREFIX}viewonce list* to browse.\n` +
         `👉 Example: *${config.BOT_PREFIX}viewonce 1* or *${config.BOT_PREFIX}viewonce 1 dm*`
+      );
+      return;
+    }
+
+    const selectedRecord =
+      getRecordFromListingSnapshot(currentChatJid, ctx.sender.jid, targetIndex) ||
+      records[targetIndex - 1];
+
+    if (!selectedRecord) {
+      await ctx.reply(
+        `❌ Pick a number from 1 to ${totalCount}, or use *${config.BOT_PREFIX}viewonce list* to browse.\n` +
+        `👉 Example: *${config.BOT_PREFIX}viewonce 1* or *${config.BOT_PREFIX}viewonce 1 dm*`
+      );
+      return;
+    }
+
+    // Verify media buffer is available
+    const buffer = await readDeletedMessageMedia(selectedRecord);
+    if (!buffer || !selectedRecord.media) {
+      await ctx.reply(
+        `❌ *View-once media #${targetIndex} could not be retrieved*\n` +
+        `From: ${selectedRecord.senderName} (${formatTime(selectedRecord.timestamp)})\n\n` +
+        `⚠️ *Reason:* The media bytes were withheld by WhatsApp server from companion devices on arrival.\n` +
+        `💡 *How to unlock:* Open the chat where this message was sent, reply directly to the view-once message, and type *${config.BOT_PREFIX}vo*.`
       );
       return;
     }
@@ -237,7 +283,6 @@ export const ViewOnceCommand: Command = {
     const botNumber = ctx.socket.user?.id?.split(':')[0]?.replace(/\D/g, '');
     const ownerJid = ownerNumber ? `${ownerNumber}@s.whatsapp.net` : (botNumber ? `${botNumber}@s.whatsapp.net` : null);
 
-    const selectedRecord = records[targetIndex - 1];
     const formatted = formatRecord(selectedRecord, targetIndex, true);
 
     if (sendToDm && ownerJid) {
