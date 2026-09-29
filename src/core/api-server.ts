@@ -59,6 +59,18 @@ export interface DashboardChatMessage {
   reactions?: Record<string, number>;
   isViewOnce?: boolean;
   isDeleted?: boolean;
+  quoted?: {
+    id: string;
+    senderJid?: string;
+    senderName?: string;
+    text?: string;
+    mediaKind?: string;
+  };
+  poll?: {
+    name: string;
+    options: string[];
+    selectableCount: number;
+  };
 }
 
 let botSocket: WASocket | null = null;
@@ -76,6 +88,9 @@ export class ApiServer {
 
   // Queue on mute: groupJid -> queued messages waiting for announce: false
   private queuedGroupMessages = new Map<string, Array<{ text: string; queuedAt: string }>>();
+
+  // Raw WAMessage cache for authentic quoted replies
+  private rawMessageMap = new Map<string, WAMessage>();
 
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
@@ -99,6 +114,14 @@ export class ApiServer {
   handleIncomingMessage(msg: WAMessage): void {
     const chatJid = msg.key.remoteJid;
     if (!chatJid || !botSocket) return;
+
+    if (msg.key.id) {
+      this.rawMessageMap.set(msg.key.id, msg);
+      if (this.rawMessageMap.size > 500) {
+        const first = this.rawMessageMap.keys().next().value;
+        if (first) this.rawMessageMap.delete(first);
+      }
+    }
 
     try {
       const parsed = this.parseWAMessage(msg, botSocket);
@@ -218,6 +241,53 @@ export class ApiServer {
       };
     }
 
+    // Extract Poll
+    let poll: DashboardChatMessage['poll'] = undefined;
+    const pollMsg = innerMsg?.pollCreationMessage || innerMsg?.pollCreationMessageV2 || innerMsg?.pollCreationMessageV3;
+    if (pollMsg) {
+      poll = {
+        name: pollMsg.name || 'Poll',
+        options: (pollMsg.options || []).map((o) => o.optionName || '').filter(Boolean),
+        selectableCount: pollMsg.selectableOptionsCount || 1,
+      };
+    }
+
+    // Extract Quoted Message Context
+    let quoted: DashboardChatMessage['quoted'] = undefined;
+    const contextInfo =
+      innerMsg?.extendedTextMessage?.contextInfo ||
+      innerMsg?.imageMessage?.contextInfo ||
+      innerMsg?.videoMessage?.contextInfo ||
+      innerMsg?.audioMessage?.contextInfo ||
+      innerMsg?.documentMessage?.contextInfo ||
+      innerMsg?.stickerMessage?.contextInfo;
+
+    if (contextInfo?.quotedMessage) {
+      const qUnwrapped = unwrapMessageInfo(contextInfo.quotedMessage).message;
+      const qText =
+        contextInfo.quotedMessage.conversation ||
+        qUnwrapped?.conversation ||
+        qUnwrapped?.extendedTextMessage?.text ||
+        qUnwrapped?.imageMessage?.caption ||
+        qUnwrapped?.videoMessage?.caption ||
+        qUnwrapped?.documentMessage?.caption ||
+        '';
+
+      let qMediaKind: string | undefined = undefined;
+      if (qUnwrapped?.imageMessage) qMediaKind = 'image';
+      else if (qUnwrapped?.videoMessage) qMediaKind = 'video';
+      else if (qUnwrapped?.audioMessage) qMediaKind = 'audio';
+      else if (qUnwrapped?.documentMessage) qMediaKind = 'document';
+      else if (qUnwrapped?.stickerMessage) qMediaKind = 'sticker';
+
+      quoted = {
+        id: contextInfo.stanzaId || '',
+        senderJid: contextInfo.participant || '',
+        text: qText || (qMediaKind ? `[${qMediaKind.toUpperCase()}]` : ''),
+        mediaKind: qMediaKind,
+      };
+    }
+
     const tsNum =
       typeof msg.messageTimestamp === 'number'
         ? msg.messageTimestamp
@@ -232,11 +302,13 @@ export class ApiServer {
       senderNumber: sender.phoneNumber,
       fromMe: Boolean(msg.key.fromMe),
       timestamp,
-      text,
-      type,
+      text: poll ? `📊 Poll: ${poll.name}` : text,
+      type: poll ? 'poll' : type,
       media,
       location,
       contact,
+      poll,
+      quoted,
       isViewOnce: Boolean(unwrapped.viewOnce || (msg.key as any)?.isViewOnce),
     };
   }
@@ -686,7 +758,7 @@ export class ApiServer {
     // SEND CHAT (TEXT, WITH ADMIN-ONLY BYPASS OR QUEUE ON MUTE)
     // -------------------------------------------------------------------------
     this.app.post('/api/chats/send', this.requireDashboardAuth.bind(this), async (req, res) => {
-      const { jid, text, bypassAdminOnly, queueOnUnlock } = req.body || {};
+      const { jid, text, bypassAdminOnly, queueOnUnlock, queueOnMute, quotedMessageId } = req.body || {};
       if (!jid || !text?.trim()) {
         res.status(400).json({ success: false, error: 'JID and text are required.' });
         return;
@@ -696,6 +768,21 @@ export class ApiServer {
         res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
         return;
       }
+
+      const shouldQueue = Boolean(queueOnUnlock || queueOnMute);
+      const rawQuoted = quotedMessageId ? this.rawMessageMap.get(quotedMessageId) : undefined;
+      const quotedContext = rawQuoted
+        ? {
+            id: quotedMessageId,
+            senderJid: rawQuoted.key.participant || rawQuoted.key.remoteJid || undefined,
+            text:
+              rawQuoted.message?.conversation ||
+              rawQuoted.message?.extendedTextMessage?.text ||
+              rawQuoted.message?.imageMessage?.caption ||
+              rawQuoted.message?.videoMessage?.caption ||
+              '[Message]',
+          }
+        : undefined;
 
       try {
         const isGroup = jid.endsWith('@g.us');
@@ -715,7 +802,7 @@ export class ApiServer {
             const isBotAdmin = Boolean(me?.admin);
 
             if (isAnnounce && !isBotAdmin) {
-              if (queueOnUnlock) {
+              if (shouldQueue) {
                 const list = this.queuedGroupMessages.get(jid) || [];
                 list.push({ text: text.trim(), queuedAt: new Date().toISOString() });
                 this.queuedGroupMessages.set(jid, list);
@@ -728,8 +815,13 @@ export class ApiServer {
               }
 
               try {
-                const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
+                const sent = await botSocket.sendMessage(
+                  jid,
+                  { text: text.trim() },
+                  rawQuoted ? { quoted: rawQuoted } : undefined
+                );
+                if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
                 res.json({ success: true, messageId: sent?.key.id, note: 'Sent as group member.' });
                 return;
               } catch (sendErr: any) {
@@ -745,22 +837,37 @@ export class ApiServer {
               if (bypassAdminOnly) {
                 try {
                   await botSocket.groupSettingUpdate(jid, 'not_announcement');
-                  const sent = await botSocket.sendMessage(jid, { text: text.trim() });
+                  const sent = await botSocket.sendMessage(
+                    jid,
+                    { text: text.trim() },
+                    rawQuoted ? { quoted: rawQuoted } : undefined
+                  );
                   await botSocket.groupSettingUpdate(jid, 'announcement');
+                  if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
                   bypassed = true;
                   note = 'Bypassed admin-only mode (temporarily unlocked group, sent message, and re-locked).';
-                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
+                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
                   res.json({ success: true, messageId: sent?.key.id, bypassed, note });
                   return;
                 } catch (toggleErr) {
-                  const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
+                  const sent = await botSocket.sendMessage(
+                    jid,
+                    { text: text.trim() },
+                    rawQuoted ? { quoted: rawQuoted } : undefined
+                  );
+                  if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+                  this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
                   res.json({ success: true, messageId: sent?.key.id, note: 'Sent directly using bot Admin privileges.' });
                   return;
                 }
               } else {
-                const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
+                const sent = await botSocket.sendMessage(
+                  jid,
+                  { text: text.trim() },
+                  rawQuoted ? { quoted: rawQuoted } : undefined
+                );
+                if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+                this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
                 res.json({ success: true, messageId: sent?.key.id, note: 'Sent directly using bot Admin privileges.' });
                 return;
               }
@@ -770,8 +877,13 @@ export class ApiServer {
           }
         }
 
-        const sent = await botSocket.sendMessage(jid, { text: text.trim() });
-        this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation');
+        const sent = await botSocket.sendMessage(
+          jid,
+          { text: text.trim() },
+          rawQuoted ? { quoted: rawQuoted } : undefined
+        );
+        if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+        this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
 
         res.json({ success: true, messageId: sent?.key.id, note });
       } catch (err: any) {
@@ -783,9 +895,22 @@ export class ApiServer {
     // SEND MEDIA & ATTACHMENTS (IMAGE, VIDEO, AUDIO/VOICE NOTE, DOCUMENT, STICKER)
     // -------------------------------------------------------------------------
     this.app.post('/api/chats/send-media', this.requireDashboardAuth.bind(this), async (req, res) => {
-      const { jid, file, caption, mimetype, fileName, viewOnce, isVoiceNote, bypassAdminOnly } = req.body || {};
-      if (!jid || !file) {
-        res.status(400).json({ success: false, error: 'JID and file data are required.' });
+      const {
+        jid,
+        file,
+        media,
+        caption,
+        mimetype,
+        fileName,
+        viewOnce,
+        isVoiceNote,
+        ptt,
+        bypassAdminOnly,
+        quotedMessageId,
+      } = req.body || {};
+      const fileData = file || media;
+      if (!jid || !fileData) {
+        res.status(400).json({ success: false, error: 'JID and file/media data are required.' });
         return;
       }
 
@@ -795,9 +920,21 @@ export class ApiServer {
       }
 
       try {
-        const matches = file.match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
-        const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(file, 'base64');
-        const effectiveMime = (matches ? matches[1] : (mimetype || 'application/octet-stream')).toLowerCase();
+        const matches = fileData.match(/^data:([A-Za-z0-9-+/.]+);base64,(.+)$/);
+        const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(fileData, 'base64');
+        const effectiveMime = (matches ? matches[1] : mimetype || 'application/octet-stream').toLowerCase();
+
+        const rawQuoted = quotedMessageId ? this.rawMessageMap.get(quotedMessageId) : undefined;
+        const quotedContext = rawQuoted
+          ? {
+              id: quotedMessageId,
+              senderJid: rawQuoted.key.participant || rawQuoted.key.remoteJid || undefined,
+              text:
+                rawQuoted.message?.conversation ||
+                rawQuoted.message?.extendedTextMessage?.text ||
+                '[Message]',
+            }
+          : undefined;
 
         // Optional announce bypass if group
         if (jid.endsWith('@g.us') && bypassAdminOnly) {
@@ -809,40 +946,62 @@ export class ApiServer {
         let sent: any;
         let kind = 'document';
 
+        const sendOpts = rawQuoted ? { quoted: rawQuoted } : undefined;
+
         if (effectiveMime.startsWith('image/') && !effectiveMime.includes('webp')) {
           kind = 'image';
-          sent = await botSocket.sendMessage(jid, {
-            image: buffer,
-            caption: caption || undefined,
-            viewOnce: Boolean(viewOnce),
-          });
+          sent = await botSocket.sendMessage(
+            jid,
+            {
+              image: buffer,
+              caption: caption || undefined,
+              viewOnce: Boolean(viewOnce),
+            },
+            sendOpts
+          );
         } else if (effectiveMime.startsWith('video/')) {
           kind = 'video';
-          sent = await botSocket.sendMessage(jid, {
-            video: buffer,
-            caption: caption || undefined,
-            viewOnce: Boolean(viewOnce),
-          });
+          sent = await botSocket.sendMessage(
+            jid,
+            {
+              video: buffer,
+              caption: caption || undefined,
+              viewOnce: Boolean(viewOnce),
+            },
+            sendOpts
+          );
         } else if (effectiveMime.startsWith('audio/')) {
           kind = 'audio';
-          sent = await botSocket.sendMessage(jid, {
-            audio: buffer,
-            mimetype: effectiveMime,
-            ptt: Boolean(isVoiceNote),
-          });
+          sent = await botSocket.sendMessage(
+            jid,
+            {
+              audio: buffer,
+              mimetype: effectiveMime,
+              ptt: Boolean(isVoiceNote || ptt),
+            },
+            sendOpts
+          );
         } else if (effectiveMime.includes('webp')) {
           kind = 'sticker';
-          sent = await botSocket.sendMessage(jid, {
-            sticker: buffer,
-          });
+          sent = await botSocket.sendMessage(
+            jid,
+            {
+              sticker: buffer,
+            },
+            sendOpts
+          );
         } else {
           kind = 'document';
-          sent = await botSocket.sendMessage(jid, {
-            document: buffer,
-            mimetype: effectiveMime,
-            fileName: fileName || 'attachment',
-            caption: caption || undefined,
-          });
+          sent = await botSocket.sendMessage(
+            jid,
+            {
+              document: buffer,
+              mimetype: effectiveMime,
+              fileName: fileName || 'attachment',
+              caption: caption || undefined,
+            },
+            sendOpts
+          );
         }
 
         if (jid.endsWith('@g.us') && bypassAdminOnly) {
@@ -850,6 +1009,8 @@ export class ApiServer {
             await botSocket.groupSettingUpdate(jid, 'announcement');
           } catch {}
         }
+
+        if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
 
         const msgObj: DashboardChatMessage = {
           id: sent?.key.id || `media-${Date.now()}`,
@@ -868,6 +1029,7 @@ export class ApiServer {
             size: buffer.length,
           },
           isViewOnce: Boolean(viewOnce),
+          quoted: quotedContext,
         };
         this.addMessageToStore(msgObj);
         this.io.to('auth').emit('chat:message', msgObj);
@@ -1131,6 +1293,324 @@ export class ApiServer {
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message });
       }
+    });
+
+    // -------------------------------------------------------------------------
+    // GET CHAT / GROUP DETAILED METADATA & PARTICIPANTS
+    // -------------------------------------------------------------------------
+    this.app.get('/api/chats/:jid/metadata', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        if (jid.endsWith('@g.us')) {
+          const meta = await botSocket.groupMetadata(jid);
+          const myPn = botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '');
+          const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
+          const me = meta.participants?.find((p) => {
+            const pNum = p.id?.replace(/\D/g, '');
+            return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
+          });
+          const isBotAdmin = Boolean(me?.admin);
+
+          let inviteCode: string | null = null;
+          if (isBotAdmin) {
+            try {
+              inviteCode = (await botSocket.groupInviteCode(jid)) || null;
+            } catch {}
+          }
+
+          res.json({
+            success: true,
+            isGroup: true,
+            id: meta.id,
+            subject: meta.subject,
+            owner: meta.owner,
+            creation: meta.creation,
+            desc: meta.desc?.toString() || '',
+            participantsCount: meta.participants?.length || 0,
+            isAnnounce: Boolean(meta.announce),
+            isRestrict: Boolean(meta.restrict),
+            isBotAdmin,
+            botAdminRole: me?.admin || null,
+            inviteCode,
+            inviteLink: inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null,
+            participants: (meta.participants || []).map((p) => ({
+              id: p.id,
+              phoneNumber: p.id.split('@')[0].replace(/\D/g, ''),
+              admin: p.admin || null,
+              isSuperAdmin: p.admin === 'superadmin',
+              isAdmin: Boolean(p.admin),
+            })),
+          });
+        } else {
+          res.json({
+            success: true,
+            isGroup: false,
+            id: jid,
+            phoneNumber: jid.split('@')[0].replace(/\D/g, ''),
+          });
+        }
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to fetch metadata.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // GROUP PARTICIPANTS UPDATE (ADD / REMOVE / PROMOTE / DEMOTE)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/participants', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const { action, participants } = req.body || {};
+      if (!jid.endsWith('@g.us')) {
+        res.status(400).json({ success: false, error: 'Only group chats support participant management.' });
+        return;
+      }
+      if (!action || !Array.isArray(participants) || !participants.length) {
+        res.status(400).json({ success: false, error: 'Action and participants array are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        const formatted = participants.map((p: string) =>
+          p.includes('@') ? p : `${p.replace(/\D/g, '')}@s.whatsapp.net`
+        );
+        const result = await botSocket.groupParticipantsUpdate(jid, formatted, action);
+        res.json({ success: true, action, result });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Participant update failed.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // GROUP SETTINGS UPDATE (ANNOUNCEMENT / LOCKED)
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/settings', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const { setting } = req.body || {};
+      if (!jid.endsWith('@g.us')) {
+        res.status(400).json({ success: false, error: 'Only group chats support settings update.' });
+        return;
+      }
+      if (!setting || !['announcement', 'not_announcement', 'locked', 'unlocked'].includes(setting)) {
+        res.status(400).json({ success: false, error: 'Valid setting is required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        await botSocket.groupSettingUpdate(jid, setting);
+        res.json({ success: true, setting });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Group setting update failed.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // UPDATE GROUP SUBJECT & DESCRIPTION
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/subject-desc', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const { subject, description } = req.body || {};
+      if (!jid.endsWith('@g.us')) {
+        res.status(400).json({ success: false, error: 'Only group chats support subject/description update.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        if (subject !== undefined) {
+          await botSocket.groupUpdateSubject(jid, subject);
+        }
+        if (description !== undefined) {
+          await botSocket.groupUpdateDescription(jid, description);
+        }
+        res.json({ success: true, subject, description });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to update subject or description.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // GROUP INVITE CODE & REVOKE
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/invite-code', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const { action } = req.body || {};
+      if (!jid.endsWith('@g.us')) {
+        res.status(400).json({ success: false, error: 'Only group chats have invite links.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        let code: string | null | undefined = null;
+        if (action === 'revoke') {
+          code = await botSocket.groupRevokeInvite(jid);
+        } else {
+          code = await botSocket.groupInviteCode(jid);
+        }
+        res.json({
+          success: true,
+          inviteCode: code,
+          inviteLink: code ? `https://chat.whatsapp.com/${code}` : null,
+        });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to get/revoke invite code.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // LEAVE GROUP
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/leave', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      if (!jid.endsWith('@g.us')) {
+        res.status(400).json({ success: false, error: 'Only groups can be left.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        await botSocket.groupLeave(jid);
+        res.json({ success: true, message: 'Left group successfully.' });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to leave group.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // SEND INTERACTIVE POLL
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/send-poll', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const { jid, name, options, selectableCount, quotedMessageId } = req.body || {};
+      if (!jid || !name || !Array.isArray(options) || options.length < 2) {
+        res.status(400).json({ success: false, error: 'JID, poll question name, and at least 2 options are required.' });
+        return;
+      }
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        const rawQuoted = quotedMessageId ? this.rawMessageMap.get(quotedMessageId) : undefined;
+        const quotedContext = rawQuoted
+          ? {
+              id: quotedMessageId,
+              senderJid: rawQuoted.key.participant || rawQuoted.key.remoteJid || undefined,
+              text:
+                rawQuoted.message?.conversation ||
+                rawQuoted.message?.extendedTextMessage?.text ||
+                '[Message]',
+            }
+          : undefined;
+
+        const sent = await botSocket.sendMessage(
+          jid,
+          {
+            poll: {
+              name: name.trim(),
+              values: options.map((o: string) => o.trim()).filter(Boolean),
+              selectableCount: Math.min(options.length, Math.max(1, Number(selectableCount) || 1)),
+            },
+          },
+          rawQuoted ? { quoted: rawQuoted } : undefined
+        );
+
+        if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
+
+        const msgObj: DashboardChatMessage = {
+          id: sent?.key.id || `poll-${Date.now()}`,
+          chatJid: jid,
+          senderJid: botSocket.user?.id || '',
+          senderName: botSocket.user?.name || 'Bot',
+          senderNumber: botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '') || '',
+          fromMe: true,
+          timestamp: new Date().toISOString(),
+          text: `📊 Poll: ${name.trim()}`,
+          type: 'poll',
+          poll: {
+            name: name.trim(),
+            options: options.map((o: string) => o.trim()).filter(Boolean),
+            selectableCount: Math.min(options.length, Math.max(1, Number(selectableCount) || 1)),
+          },
+          quoted: quotedContext,
+        };
+        this.addMessageToStore(msgObj);
+        this.io.to('auth').emit('chat:message', msgObj);
+
+        res.json({ success: true, messageId: sent?.key.id });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to send poll.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // MARK CHAT MESSAGES AS READ
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/mark-read', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid || '');
+      const { messageIds } = req.body || {};
+
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected.' });
+        return;
+      }
+
+      try {
+        const live = this.liveMessageStore.get(jid) || [];
+        const targetIds: string[] = Array.isArray(messageIds) && messageIds.length
+          ? messageIds
+          : live.filter((m) => !m.fromMe).map((m) => m.id);
+
+        const keys = targetIds.map((id) => ({
+          remoteJid: jid,
+          id,
+        }));
+
+        if (keys.length) {
+          await botSocket.readMessages(keys);
+        }
+
+        res.json({ success: true, count: keys.length });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to mark read.' });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // CLEAR IN-MEMORY CHAT BUFFER
+    // -------------------------------------------------------------------------
+    this.app.post('/api/chats/:jid/clear-history', this.requireDashboardAuth.bind(this), (req, res) => {
+      const jid = String(req.params.jid || '');
+      this.liveMessageStore.delete(jid);
+      res.json({ success: true, message: 'Chat history cleared in dashboard memory.' });
     });
 
     // -------------------------------------------------------------------------
@@ -1454,7 +1934,13 @@ export class ApiServer {
     this.app.use(express.static(path.join(process.cwd(), 'public')));
   }
 
-  private recordOutgoingChatMessage(chatJid: string, messageId: string | undefined, text: string, type: string) {
+  private recordOutgoingChatMessage(
+    chatJid: string,
+    messageId: string | undefined,
+    text: string,
+    type: string,
+    quoted?: DashboardChatMessage['quoted']
+  ) {
     if (!botSocket) return;
     const msgObj: DashboardChatMessage = {
       id: messageId || `sent-${Date.now()}`,
@@ -1466,6 +1952,7 @@ export class ApiServer {
       timestamp: new Date().toISOString(),
       text,
       type,
+      quoted,
     };
     this.addMessageToStore(msgObj);
     this.io.to('auth').emit('chat:message', msgObj);
