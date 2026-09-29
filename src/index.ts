@@ -1,3 +1,30 @@
+// Suppress noisy raw console logs from libsignal-node
+const rawConsoleInfo = console.info.bind(console);
+console.info = (...args: any[]) => {
+  if (
+    typeof args[0] === 'string' &&
+    (args[0].startsWith('Closing session:') ||
+      args[0].startsWith('Removing old closed session:') ||
+      args[0].startsWith('Opening session:') ||
+      args[0].includes('closed session'))
+  ) {
+    return;
+  }
+  rawConsoleInfo(...args);
+};
+
+const rawConsoleWarn = console.warn.bind(console);
+console.warn = (...args: any[]) => {
+  if (
+    typeof args[0] === 'string' &&
+    (args[0].startsWith('Session already closed') ||
+      args[0].startsWith('Session already open'))
+  ) {
+    return;
+  }
+  rawConsoleWarn(...args);
+};
+
 import qrcode from 'qrcode';
 import loadCommands from './commands';
 import config from './config';
