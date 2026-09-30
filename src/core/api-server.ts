@@ -109,6 +109,9 @@ export class ApiServer {
   // Group metadata cache for resilience against WhatsApp IQ rate-limits and timeouts
   private groupMetadataCache = new Map<string, { data: any; cachedAt: number }>();
 
+  // Chat latest activity tracking: chatJid -> { timestamp: string, lastText?: string }
+  private chatLastActiveMap = new Map<string, { timestamp: string; lastText?: string }>();
+
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
     this.app = express();
@@ -131,7 +134,7 @@ export class ApiServer {
   // ---------------------------------------------------------------------------
   handleIncomingMessage(msg: WAMessage): void {
     const chatJid = msg.key.remoteJid;
-    if (!chatJid || !botSocket) return;
+    if (!chatJid || !botSocket || chatJid === 'status@broadcast') return;
 
     if (msg.key.id) {
       this.rawMessageMap.set(msg.key.id, msg);
@@ -150,6 +153,10 @@ export class ApiServer {
     } catch (err) {
       logger.debug({ err, id: msg.key.id }, 'Error parsing incoming message for dashboard');
     }
+  }
+
+  handleContactsSync(contacts: any[]): void {
+    this.io.to('auth').emit('contacts:updated', { count: Array.isArray(contacts) ? contacts.length : 0 });
   }
 
   handleGroupsUpdate(updates: Partial<GroupMetadata>[]): void {
@@ -186,15 +193,92 @@ export class ApiServer {
       if (list.length > 100) list.shift();
     }
     this.liveMessageStore.set(chatMsg.chatJid, list);
+
+    this.chatLastActiveMap.set(chatMsg.chatJid, {
+      timestamp: chatMsg.timestamp,
+      lastText:
+        chatMsg.text ||
+        (chatMsg.media ? `[${chatMsg.media.kind}]` : '') ||
+        (chatMsg.poll ? `[Poll: ${chatMsg.poll.name}]` : '') ||
+        (chatMsg.location ? '[Location]' : '') ||
+        (chatMsg.contact ? `[Contact: ${chatMsg.contact.displayName}]` : ''),
+    });
   }
 
   private parseWAMessage(msg: WAMessage, socket: WASocket): DashboardChatMessage | null {
     const chatJid = msg.key.remoteJid;
-    if (!chatJid) return null;
+    if (!chatJid || chatJid === 'status@broadcast') return null;
 
     const sender = getSenderIdentity(msg, socket);
     const unwrapped = unwrapMessageInfo(msg.message);
     const innerMsg = unwrapped.message;
+
+    // 1. Intercept incoming reaction: update target message reactions directly (NEVER add as message bubble!)
+    if (innerMsg?.reactionMessage) {
+      const react = innerMsg.reactionMessage;
+      if (react.key?.id) {
+        const targetId = react.key.id;
+        const targetChatJid = react.key.remoteJid || chatJid;
+        const targetList = this.liveMessageStore.get(targetChatJid);
+        const targetMsg = targetList?.find((m) => m.id === targetId);
+        const emoji = react.text || '';
+        if (targetMsg) {
+          if (!targetMsg.reactions) targetMsg.reactions = {};
+          if (emoji) {
+            targetMsg.reactions[emoji] = (targetMsg.reactions[emoji] || 0) + 1;
+          }
+        }
+        this.io.to('auth').emit('chat:reaction', {
+          chatJid: targetChatJid,
+          messageId: targetId,
+          emoji,
+          senderJid: sender.jid,
+        });
+      }
+      return null;
+    }
+
+    // 2. Intercept incoming protocolMessage: revocations or internal stanzas (NEVER add as message bubble!)
+    if (innerMsg?.protocolMessage) {
+      const proto = innerMsg.protocolMessage;
+      if (proto.type === 0 && proto.key?.id) {
+        const targetId = proto.key.id;
+        const targetChatJid = proto.key.remoteJid || chatJid;
+        const targetList = this.liveMessageStore.get(targetChatJid);
+        const targetMsg = targetList?.find((m) => m.id === targetId);
+        if (targetMsg) {
+          targetMsg.isDeleted = true;
+        }
+        this.io.to('auth').emit('chat:message-deleted', {
+          chatJid: targetChatJid,
+          messageId: targetId,
+        });
+      }
+      return null;
+    }
+
+    // 3. Drop non-messaging action stanzas: senderKeyDistributionMessage, peerDataOperation, keepAlive, etc.
+    const anyInner = innerMsg as any;
+    if (
+      innerMsg?.senderKeyDistributionMessage ||
+      anyInner?.peerDataOperationRequestMessage ||
+      anyInner?.keepAlive ||
+      anyInner?.deviceSentMessage
+    ) {
+      const realKeys = innerMsg
+        ? Object.keys(innerMsg).filter(
+            (k) =>
+              ![
+                'senderKeyDistributionMessage',
+                'messageContextInfo',
+                'peerDataOperationRequestMessage',
+                'keepAlive',
+                'deviceSentMessage',
+              ].includes(k)
+          )
+        : [];
+      if (!realKeys.length) return null;
+    }
 
     const text =
       msg.message?.conversation ||
@@ -311,6 +395,11 @@ export class ApiServer {
         ? msg.messageTimestamp
         : (msg.messageTimestamp as any)?.low || 0;
     const timestamp = tsNum ? new Date(tsNum * 1000).toISOString() : new Date().toISOString();
+
+    // Drop empty stanzas that have no text, media, location, contact, or poll
+    if (!text && !media && !location && !contact && !poll) {
+      return null;
+    }
 
     return {
       id: msg.key.id || `msg-${Date.now()}`,
@@ -571,6 +660,19 @@ export class ApiServer {
             });
             const isBotAdmin = Boolean(me?.admin);
 
+            const live = this.liveMessageStore.get(id) || [];
+            const lastLive = live[live.length - 1];
+            const cachedActive = this.chatLastActiveMap.get(id);
+            const lastActive =
+              cachedActive?.timestamp ||
+              lastLive?.timestamp ||
+              (meta.creation ? new Date(meta.creation * 1000).toISOString() : '');
+            const lastMessage =
+              cachedActive?.lastText ||
+              lastLive?.text ||
+              (lastLive?.media ? `[${lastLive.media.kind}]` : '') ||
+              '';
+
             groups.push({
               id,
               name: meta.subject || 'Untitled Group',
@@ -582,6 +684,8 @@ export class ApiServer {
               isBotAdmin,
               owner: meta.owner || '',
               creation: meta.creation || 0,
+              lastActive,
+              lastMessage,
             });
           }
         } catch (groupErr: any) {
@@ -596,12 +700,28 @@ export class ApiServer {
             const saved = JSON.parse(fs.readFileSync(contactsPath, 'utf8'));
             for (const [jid, contact] of Object.entries(saved as Record<string, any>)) {
               if (jid.endsWith('@g.us') || jid.endsWith('@newsletter')) continue;
+              const live = this.liveMessageStore.get(jid) || [];
+              const lastLive = live[live.length - 1];
+              const cachedActive = this.chatLastActiveMap.get(jid);
+              const lastActive =
+                cachedActive?.timestamp ||
+                lastLive?.timestamp ||
+                contact.updatedAt ||
+                '';
+              const lastMessage =
+                cachedActive?.lastText ||
+                lastLive?.text ||
+                (lastLive?.media ? `[${lastLive.media.kind}]` : '') ||
+                '';
+
               directChatsMap.set(jid, {
                 id: jid,
-                name: contact.displayName || contact.profileName || contact.phoneNumber || jid,
+                name: contact.savedName || contact.displayName || contact.profileName || contact.phoneNumber || jid,
+                savedName: contact.savedName || undefined,
                 phoneNumber: contact.phoneNumber || jid.replace(/\D/g, ''),
                 isGroup: false,
-                lastActive: contact.updatedAt || '',
+                lastActive,
+                lastMessage,
               });
             }
           } catch {}
@@ -610,18 +730,20 @@ export class ApiServer {
         const deletedChats = listDeletedChats();
         for (const item of deletedChats) {
           if (item.chatJid.endsWith('@g.us') || directChatsMap.has(item.chatJid)) continue;
+          const cachedActive = this.chatLastActiveMap.get(item.chatJid);
           directChatsMap.set(item.chatJid, {
             id: item.chatJid,
             name: item.lastSenderName || item.chatJid,
             phoneNumber: item.chatJid.replace(/\D/g, ''),
             isGroup: false,
-            lastActive: item.lastDeletedAt,
+            lastActive: cachedActive?.timestamp || item.lastDeletedAt,
+            lastMessage: cachedActive?.lastText || '[Deleted Message]',
           });
         }
 
-        groups.sort((a, b) => a.name.localeCompare(b.name));
+        groups.sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
         const directChats = Array.from(directChatsMap.values()).sort((a, b) =>
-          (b.lastActive || '').localeCompare(a.lastActive || '')
+          new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime()
         );
 
         res.json({
@@ -634,6 +756,18 @@ export class ApiServer {
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Failed to fetch chats' });
       }
+    });
+
+    this.app.get('/api/contacts', this.requireDashboardAuth.bind(this), (req, res) => {
+      const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
+      if (fs.existsSync(contactsPath)) {
+        try {
+          const saved = JSON.parse(fs.readFileSync(contactsPath, 'utf8'));
+          res.json({ success: true, contacts: Object.values(saved) });
+          return;
+        } catch {}
+      }
+      res.json({ success: true, contacts: [] });
     });
 
     // -------------------------------------------------------------------------
@@ -711,6 +845,11 @@ export class ApiServer {
       } catch {}
 
       const sorted = Array.from(messageMap.values())
+        .filter(
+          (m) =>
+            !['protocolMessage', 'reactionMessage', 'senderKeyDistributionMessage', 'peerDataOperationRequestMessage'].includes(m.type) &&
+            Boolean(m.text || m.media || m.location || m.contact || m.poll || m.isDeleted)
+        )
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
         .slice(-limit);
 

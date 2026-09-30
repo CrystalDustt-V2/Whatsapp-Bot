@@ -687,6 +687,97 @@
     .chat-bubble-row.outgoing .bubble-reactions-pill { right: 10px; }
     .chat-bubble-row.incoming .bubble-reactions-pill { left: 10px; }
 
+    .chip-emoji-cat {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .chip-emoji-cat:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+    }
+    .chip-emoji-cat.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: white;
+    }
+    .custom-emoji-btn {
+      width: 40px;
+      height: 40px;
+      font-size: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.12s, background 0.12s, border-color 0.12s;
+      user-select: none;
+    }
+    .custom-emoji-btn:hover {
+      transform: scale(1.18);
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.5);
+    }
+    .info-card-section {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .info-card-header {
+      font-size: 11px;
+      font-weight: 700;
+      color: #38bdf8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .info-row:last-child {
+      border-bottom: none;
+    }
+    .info-label {
+      color: var(--text-dim);
+    }
+    .info-val {
+      color: var(--text);
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 65%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn-copy-mini {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 10.5px;
+      padding: 1px 5px;
+      transition: all 0.15s;
+    }
+    .btn-copy-mini:hover {
+      background: rgba(56, 189, 248, 0.25);
+      color: #38bdf8;
+      border-color: #38bdf8;
+    }
+
     /* Quoted Box in Chat Bubbles */
     .bubble-quoted-box {
       background: rgba(0, 0, 0, 0.28);
@@ -1976,6 +2067,56 @@
     </div>
   </div>
 
+  <!-- Modal: Custom Emoji Reaction Picker -->
+  <div id="modal-custom-emoji" class="modal-overlay" onclick="closeModal('modal-custom-emoji')">
+    <div class="modal-card" style="width:min(520px, 95vw);max-height:85vh;text-align:left;display:flex;flex-direction:column;" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;">
+        <h3 style="font-size:16.5px;margin:0;display:flex;align-items:center;gap:8px;">
+          <span>React with Emoji</span>
+          <span id="custom-emoji-target-label" style="font-size:12px;color:var(--text-dim);font-weight:normal;"></span>
+        </h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-custom-emoji')">&times;</button>
+      </div>
+      <div style="margin-bottom:10px;">
+        <input type="text" id="emoji-search-input" placeholder="🔍 Search emoji by name (e.g. smile, heart, fire, check)..." oninput="filterCustomEmojis()" style="width:100%;padding:8px 12px;font-size:13px;border-radius:8px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+      </div>
+      <div id="emoji-category-tabs" style="display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;padding-bottom:4px;">
+        <button class="btn chip-emoji-cat active" onclick="selectEmojiCategory('all', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">All</button>
+        <button class="btn chip-emoji-cat" onclick="selectEmojiCategory('smileys', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">😀 Smileys</button>
+        <button class="btn chip-emoji-cat" onclick="selectEmojiCategory('gestures', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">👍 Gestures</button>
+        <button class="btn chip-emoji-cat" onclick="selectEmojiCategory('hearts', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">❤️ Hearts</button>
+        <button class="btn chip-emoji-cat" onclick="selectEmojiCategory('fun', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">🎉 Party & Fun</button>
+        <button class="btn chip-emoji-cat" onclick="selectEmojiCategory('symbols', this)" style="padding:4px 10px;font-size:11.5px;border-radius:12px;">✨ Symbols</button>
+      </div>
+      <div id="emoji-grid-container" style="flex:1;overflow-y:auto;max-height:360px;display:grid;grid-template-columns:repeat(auto-fill, minmax(42px, 1fr));gap:6px;padding:4px;">
+        <!-- Injected dynamically -->
+      </div>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px;">
+        <button class="btn btn-secondary" style="font-size:12px;color:#fb7185;" onclick="sendCustomEmojiReaction('')">Remove Reaction</button>
+        <button class="btn btn-secondary" onclick="closeModal('modal-custom-emoji')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Message Information & Details -->
+  <div id="modal-message-info" class="modal-overlay" onclick="closeModal('modal-message-info')">
+    <div class="modal-card" style="width:min(560px, 95vw);max-height:88vh;text-align:left;display:flex;flex-direction:column;" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;">
+        <h3 style="font-size:16.5px;margin:0;display:flex;align-items:center;gap:8px;">
+          <span>ℹ️ Message Details & Info</span>
+        </h3>
+        <button class="btn-secondary" style="border:none;font-size:18px;cursor:pointer;" onclick="closeModal('modal-message-info')">&times;</button>
+      </div>
+      <div id="message-info-content" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding-right:4px;">
+        <!-- Injected dynamically -->
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px;">
+        <button class="btn btn-secondary" id="btn-copy-raw-msg" onclick="copyRawMessageJson()" style="font-size:12px;">📋 Copy JSON</button>
+        <button class="btn btn-secondary" onclick="closeModal('modal-message-info')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Dashboard JavaScript Engine -->
   <script>
     let socket = null;
@@ -2148,6 +2289,24 @@
       renderChatList();
     }
 
+    function formatChatTime(isoString) {
+      if (!isoString) return '';
+      const date = new Date(isoString);
+      if (isNaN(date.getTime())) return '';
+      const now = new Date();
+      const isToday = date.toDateString() === now.toDateString();
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isYesterday = date.toDateString() === yesterday.toDateString();
+      if (isToday) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      } else if (isYesterday) {
+        return 'Yesterday';
+      } else {
+        return date.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+      }
+    }
+
     function renderChatList() {
       const listEl = document.getElementById('chat-items-list');
       const search = (document.getElementById('chat-search-input').value || '').toLowerCase();
@@ -2156,16 +2315,24 @@
       if (currentChatFilter === 'all') {
         items = [...chatsCache.groups, ...chatsCache.directChats];
       } else if (currentChatFilter === 'groups') {
-        items = chatsCache.groups;
+        items = [...chatsCache.groups];
       } else if (currentChatFilter === 'admin-only') {
         items = chatsCache.groups.filter(g => g.isAnnounce);
       } else if (currentChatFilter === 'dms') {
-        items = chatsCache.directChats;
+        items = [...chatsCache.directChats];
       }
 
       if (search) {
-        items = items.filter(i => (i.name || '').toLowerCase().includes(search) || (i.id || '').includes(search));
+        items = items.filter(i =>
+          (i.name || '').toLowerCase().includes(search) ||
+          (i.savedName || '').toLowerCase().includes(search) ||
+          (i.phoneNumber || '').includes(search) ||
+          (i.id || '').includes(search)
+        );
       }
+
+      // Sort items by latest date/activity descending
+      items.sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
 
       if (!items.length) {
         listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No matching chats found.</div>`;
@@ -2182,14 +2349,23 @@
         if (isAnnounce) badges += `<span class="tag-pill tag-admin-only">Admin Only</span>`;
         if (isBotAdmin) badges += `<span class="tag-pill tag-bot-admin">Bot Admin</span>`;
 
+        const displayName = item.savedName || item.name || item.id;
+        const timeStr = formatChatTime(item.lastActive);
+        const lastMsgPreview = item.lastMessage ? escapeHtml(item.lastMessage) : '';
+
         return `
           <div class="chat-item ${isSel ? 'selected' : ''}" onclick="selectChat('${item.id}', ${item.isGroup})">
             <div class="chat-item-avatar">${icon}</div>
             <div class="chat-item-info">
-              <div class="chat-item-title">${escapeHtml(item.name)}</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                <div class="chat-item-title" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</div>
+                ${timeStr ? `<span style="font-size:10.5px;color:var(--text-dim);flex-shrink:0;">${timeStr}</span>` : ''}
+              </div>
+              ${lastMsgPreview ? `<div style="font-size:11.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${lastMsgPreview}</div>` : ''}
               <div class="chat-item-sub">
                 ${badges}
-                <span>${item.isGroup ? `${item.participantsCount || 0} members` : (item.phoneNumber || 'Direct')}</span>
+                ${item.savedName ? `<span style="color:#38bdf8;font-size:10px;background:rgba(56,189,248,0.12);padding:1px 5px;border-radius:4px;" title="Synced from primary phone address book">Synced</span>` : ''}
+                <span>${item.isGroup ? `${item.participantsCount || 0} members` : (item.phoneNumber ? `+${item.phoneNumber}` : 'Direct')}</span>
               </div>
             </div>
           </div>
@@ -2512,7 +2688,10 @@
             <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😮', '${msg.senderJid || ''}', ${isOut})" title="Wow">😮</button>
             <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '😢', '${msg.senderJid || ''}', ${isOut})" title="Sad">😢</button>
             <button class="action-emoji-btn" onclick="sendEmojiReaction('${msg.id}', '🙏', '${msg.senderJid || ''}', ${isOut})" title="Pray">🙏</button>
+            <button class="action-emoji-btn" onclick="openCustomEmojiPicker('${msg.id}', '${msg.senderJid || ''}', ${isOut})" title="More emoji reactions (Custom)">➕</button>
             ${replyBtn}
+            <button class="action-emoji-btn" onclick="copyMessageText('${escapeHtml(msg.id)}')" title="Copy message text">📋</button>
+            <button class="action-emoji-btn" onclick="showMessageInfo('${escapeHtml(msg.id)}')" title="Message info & details">ℹ️</button>
             <button class="action-emoji-btn" onclick="openForwardModal('${escapeHtml(msg.id)}')" title="Batch forward to multiple chats">↗️</button>
             ${revokeBtn}
           </div>
@@ -3756,6 +3935,476 @@
       }
     }
 
+    // --- Toast & Clipboard Notifications ---
+    function showToast(text) {
+      let toast = document.getElementById('dashboard-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'dashboard-toast';
+        toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0f172a;color:#f8fafc;padding:9px 18px;border-radius:20px;font-size:12.5px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.6);border:1px solid rgba(56,189,248,0.4);z-index:99999;transition:opacity 0.25s, transform 0.25s;opacity:0;pointer-events:none;';
+        document.body.appendChild(toast);
+      }
+      toast.textContent = text;
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+      clearTimeout(toast._timeout);
+      toast._timeout = setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(-50%) translateY(10px)';
+      }, 2500);
+    }
+
+    async function copyToClipboard(text, successMsg = 'Copied to clipboard!') {
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(String(text));
+        showToast(successMsg);
+      } catch (e) {
+        prompt('Copy to clipboard:', String(text));
+      }
+    }
+
+    async function copyMessageText(messageId) {
+      const msg = currentMessages.find((m) => m.id === messageId);
+      if (!msg) return;
+      const textToCopy = msg.text || (msg.media ? `[Attachment: ${msg.media.fileName || msg.media.kind}]` : '') || '';
+      if (!textToCopy) {
+        showToast('No text content in this message');
+        return;
+      }
+      await copyToClipboard(textToCopy, 'Message text copied!');
+    }
+
+    // --- Custom Emoji Reaction Engine ---
+    let pendingEmojiTarget = null;
+    let currentEmojiCategory = 'all';
+
+    const EMOJI_DATABASE = [
+      // Smileys & Emotion
+      { emoji: '😀', cat: 'smileys', tags: 'grinning face happy smile' },
+      { emoji: '😃', cat: 'smileys', tags: 'smiley happy joy' },
+      { emoji: '😄', cat: 'smileys', tags: 'smile laugh happy' },
+      { emoji: '😁', cat: 'smileys', tags: 'grin beaming happy' },
+      { emoji: '😆', cat: 'smileys', tags: 'laughing satisfied haha' },
+      { emoji: '😅', cat: 'smileys', tags: 'sweat smile relief' },
+      { emoji: '🤣', cat: 'smileys', tags: 'rofl rolling on the floor laughing' },
+      { emoji: '😂', cat: 'smileys', tags: 'joy tears laugh haha' },
+      { emoji: '🙂', cat: 'smileys', tags: 'slightly smiling face' },
+      { emoji: '🙃', cat: 'smileys', tags: 'upside down sarcastic silly' },
+      { emoji: '😉', cat: 'smileys', tags: 'wink flirty' },
+      { emoji: '😊', cat: 'smileys', tags: 'blush smile warm' },
+      { emoji: '😇', cat: 'smileys', tags: 'halo innocent angel' },
+      { emoji: '🥰', cat: 'smileys', tags: 'smiling face with hearts in love' },
+      { emoji: '😍', cat: 'smileys', tags: 'heart eyes love' },
+      { emoji: '🤩', cat: 'smileys', tags: 'star struck excited' },
+      { emoji: '😘', cat: 'smileys', tags: 'kissing heart blow kiss' },
+      { emoji: '😋', cat: 'smileys', tags: 'yum delicious tongue food' },
+      { emoji: '😛', cat: 'smileys', tags: 'tongue silly' },
+      { emoji: '😜', cat: 'smileys', tags: 'wink tongue playful' },
+      { emoji: '🤪', cat: 'smileys', tags: 'crazy wild goofy' },
+      { emoji: '😝', cat: 'smileys', tags: 'squint tongue silly' },
+      { emoji: '🤑', cat: 'smileys', tags: 'money rich greedy' },
+      { emoji: '🤗', cat: 'smileys', tags: 'hug warm embrace' },
+      { emoji: '🤭', cat: 'smileys', tags: 'giggle hand over mouth oops' },
+      { emoji: '🤫', cat: 'smileys', tags: 'shh quiet secret silence' },
+      { emoji: '🤔', cat: 'smileys', tags: 'thinking wonder consider hmm' },
+      { emoji: '🤐', cat: 'smileys', tags: 'zipper mouth shut secret' },
+      { emoji: '🤨', cat: 'smileys', tags: 'raised eyebrow skeptical doubt' },
+      { emoji: '😐', cat: 'smileys', tags: 'neutral face poker' },
+      { emoji: '😑', cat: 'smileys', tags: 'expressionless blank' },
+      { emoji: '😶', cat: 'smileys', tags: 'no mouth speech' },
+      { emoji: '😏', cat: 'smileys', tags: 'smirk sarcastic smug' },
+      { emoji: '😒', cat: 'smileys', tags: 'unamused displeased bored' },
+      { emoji: '🙄', cat: 'smileys', tags: 'rolling eyes eye roll annoyed' },
+      { emoji: '😬', cat: 'smileys', tags: 'grimace nervous awkward' },
+      { emoji: '🤥', cat: 'smileys', tags: 'lying pinocchio liar' },
+      { emoji: '😌', cat: 'smileys', tags: 'relieved relaxed calm' },
+      { emoji: '😔', cat: 'smileys', tags: 'pensive sad sorrow' },
+      { emoji: '😪', cat: 'smileys', tags: 'sleepy tired snot' },
+      { emoji: '🤤', cat: 'smileys', tags: 'drooling hungry crave' },
+      { emoji: '😴', cat: 'smileys', tags: 'sleeping zzz tired' },
+      { emoji: '😷', cat: 'smileys', tags: 'mask sick virus doctor' },
+      { emoji: '🤒', cat: 'smileys', tags: 'thermometer sick fever ill' },
+      { emoji: '🤕', cat: 'smileys', tags: 'head bandage hurt injured' },
+      { emoji: '🤢', cat: 'smileys', tags: 'nauseated vomit disgust' },
+      { emoji: '🤮', cat: 'smileys', tags: 'vomiting puking gross' },
+      { emoji: '🤧', cat: 'smileys', tags: 'sneezing tissue cold' },
+      { emoji: '🥵', cat: 'smileys', tags: 'hot face sweating summer heat' },
+      { emoji: '🥶', cat: 'smileys', tags: 'cold freezing ice winter' },
+      { emoji: '🥴', cat: 'smileys', tags: 'woozy drunk dizzy tipsy' },
+      { emoji: '😵', cat: 'smileys', tags: 'dizzy knocked out' },
+      { emoji: '🤯', cat: 'smileys', tags: 'exploding head mind blown shocked' },
+      { emoji: '🤠', cat: 'smileys', tags: 'cowboy hat rodeo' },
+      { emoji: '🥳', cat: 'smileys', tags: 'partying celebration celebrate' },
+      { emoji: '😎', cat: 'smileys', tags: 'sunglasses cool badass' },
+      { emoji: '🤓', cat: 'smileys', tags: 'nerd glasses geek smart' },
+      { emoji: '🧐', cat: 'smileys', tags: 'monocle classy inspect' },
+      { emoji: '😕', cat: 'smileys', tags: 'confused puzzled' },
+      { emoji: '😟', cat: 'smileys', tags: 'worried concern' },
+      { emoji: '🙁', cat: 'smileys', tags: 'slightly frowning frown' },
+      { emoji: '😮', cat: 'smileys', tags: 'open mouth surprise wow' },
+      { emoji: '😲', cat: 'smileys', tags: 'astonished shocked' },
+      { emoji: '😳', cat: 'smileys', tags: 'flushed embarrassed wide eyed' },
+      { emoji: '🥺', cat: 'smileys', tags: 'pleading puppy eyes beg please' },
+      { emoji: '😦', cat: 'smileys', tags: 'frowning open mouth' },
+      { emoji: '😧', cat: 'smileys', tags: 'anguished stunned' },
+      { emoji: '😨', cat: 'smileys', tags: 'fearful scared dread' },
+      { emoji: '😰', cat: 'smileys', tags: 'anxious sweat panic' },
+      { emoji: '😥', cat: 'smileys', tags: 'sad relieved whew' },
+      { emoji: '😢', cat: 'smileys', tags: 'crying sad tear' },
+      { emoji: '😭', cat: 'smileys', tags: 'loudly crying sob bawl tears' },
+      { emoji: '😱', cat: 'smileys', tags: 'screaming fear panic munch scream' },
+      { emoji: '😖', cat: 'smileys', tags: 'confounded frustration' },
+      { emoji: '😣', cat: 'smileys', tags: 'persevering struggle endure' },
+      { emoji: '😞', cat: 'smileys', tags: 'disappointed sad let down' },
+      { emoji: '😓', cat: 'smileys', tags: 'downcast face with sweat stress' },
+      { emoji: '😩', cat: 'smileys', tags: 'weary exhausted tired whine' },
+      { emoji: '😫', cat: 'smileys', tags: 'tired groan fatigue' },
+      { emoji: '🥱', cat: 'smileys', tags: 'yawning bored sleep' },
+      { emoji: '😤', cat: 'smileys', tags: 'triumph huff proud anger' },
+      { emoji: '😡', cat: 'smileys', tags: 'enraged mad pouting angry' },
+      { emoji: '😠', cat: 'smileys', tags: 'angry cross annoyed mad' },
+      { emoji: '🤬', cat: 'smileys', tags: 'swearing cursing profanity angry' },
+      { emoji: '😈', cat: 'smileys', tags: 'devil smiling horned mischievous' },
+      { emoji: '👿', cat: 'smileys', tags: 'angry devil horned imp' },
+      { emoji: '💀', cat: 'smileys', tags: 'skull dead skeleton dying lol' },
+      { emoji: '☠️', cat: 'smileys', tags: 'skull crossbones pirate danger death' },
+      { emoji: '💩', cat: 'smileys', tags: 'poop crap poop emoji' },
+      { emoji: '🤡', cat: 'smileys', tags: 'clown circus foolish' },
+      { emoji: '👻', cat: 'smileys', tags: 'ghost spooky halloween' },
+      { emoji: '👽', cat: 'smileys', tags: 'alien ufo extraterrestrial' },
+      { emoji: '🤖', cat: 'smileys', tags: 'robot bot automated AI' },
+
+      // Gestures
+      { emoji: '👍', cat: 'gestures', tags: 'thumbs up like approve good yes ok' },
+      { emoji: '👎', cat: 'gestures', tags: 'thumbs down dislike bad no' },
+      { emoji: '👌', cat: 'gestures', tags: 'ok sign perfect chef kiss fine' },
+      { emoji: '🤌', cat: 'gestures', tags: 'pinched fingers italian what do you want' },
+      { emoji: '🤏', cat: 'gestures', tags: 'pinching hand tiny bit little small' },
+      { emoji: '✌️', cat: 'gestures', tags: 'victory peace sign two' },
+      { emoji: '🤞', cat: 'gestures', tags: 'crossed fingers good luck hope' },
+      { emoji: '🫰', cat: 'gestures', tags: 'finger heart money hand' },
+      { emoji: '🤟', cat: 'gestures', tags: 'love you gesture rock on' },
+      { emoji: '🤘', cat: 'gestures', tags: 'sign of the horns metal rock' },
+      { emoji: '🤙', cat: 'gestures', tags: 'call me hand shaka hang loose' },
+      { emoji: '👈', cat: 'gestures', tags: 'backhand index pointing left' },
+      { emoji: '👉', cat: 'gestures', tags: 'backhand index pointing right' },
+      { emoji: '👆', cat: 'gestures', tags: 'backhand index pointing up' },
+      { emoji: '👇', cat: 'gestures', tags: 'backhand index pointing down' },
+      { emoji: '☝️', cat: 'gestures', tags: 'index pointing up attention listen' },
+      { emoji: '✋', cat: 'gestures', tags: 'raised hand stop high five' },
+      { emoji: '🤚', cat: 'gestures', tags: 'raised back of hand' },
+      { emoji: '🖐️', cat: 'gestures', tags: 'hand with fingers splayed five' },
+      { emoji: '🖖', cat: 'gestures', tags: 'vulcan salute spock live long prosper' },
+      { emoji: '👋', cat: 'gestures', tags: 'waving hand hello hi goodbye bye' },
+      { emoji: '👏', cat: 'gestures', tags: 'clapping hands applause bravo praise' },
+      { emoji: '🙌', cat: 'gestures', tags: 'raising hands hooray celebration praise' },
+      { emoji: '👐', cat: 'gestures', tags: 'open hands embrace' },
+      { emoji: '🤲', cat: 'gestures', tags: 'palms up together pray bless duaa' },
+      { emoji: '🤝', cat: 'gestures', tags: 'handshake deal agree partner greeting' },
+      { emoji: '🙏', cat: 'gestures', tags: 'folded hands pray please thank you namaste' },
+      { emoji: '✍️', cat: 'gestures', tags: 'writing hand note author' },
+      { emoji: '💅', cat: 'gestures', tags: 'nail polish sassy care free' },
+      { emoji: '💪', cat: 'gestures', tags: 'flexed biceps muscle strong power gym' },
+      { emoji: '👀', cat: 'gestures', tags: 'eyes looking watching observe see' },
+      { emoji: '👁️', cat: 'gestures', tags: 'eye look single watch' },
+
+      // Hearts & Symbols
+      { emoji: '❤️', cat: 'hearts', tags: 'red heart love passion' },
+      { emoji: '🧡', cat: 'hearts', tags: 'orange heart love' },
+      { emoji: '💛', cat: 'hearts', tags: 'yellow heart friendship' },
+      { emoji: '💚', cat: 'hearts', tags: 'green heart nature env' },
+      { emoji: '💙', cat: 'hearts', tags: 'blue heart loyalty' },
+      { emoji: '💜', cat: 'hearts', tags: 'purple heart royalty' },
+      { emoji: '🖤', cat: 'hearts', tags: 'black heart dark sorrow emo' },
+      { emoji: '🤍', cat: 'hearts', tags: 'white heart pure peace' },
+      { emoji: '🤎', cat: 'hearts', tags: 'brown heart chocolate' },
+      { emoji: '💔', cat: 'hearts', tags: 'broken heart heartbreak sad dump' },
+      { emoji: '❣️', cat: 'hearts', tags: 'heart exclamation mark passion' },
+      { emoji: '💕', cat: 'hearts', tags: 'two hearts love' },
+      { emoji: '💞', cat: 'hearts', tags: 'revolving hearts' },
+      { emoji: '💓', cat: 'hearts', tags: 'beating heart pulse' },
+      { emoji: '💗', cat: 'hearts', tags: 'growing heart loving' },
+      { emoji: '💖', cat: 'hearts', tags: 'sparkling heart' },
+      { emoji: '💘', cat: 'hearts', tags: 'heart with arrow cupid crush' },
+      { emoji: '💝', cat: 'hearts', tags: 'heart with ribbon gift present' },
+
+      // Party & Fun
+      { emoji: '🎉', cat: 'fun', tags: 'party popper celebrate tada congratulations' },
+      { emoji: '🎊', cat: 'fun', tags: 'confetti ball celebration party' },
+      { emoji: '🎈', cat: 'fun', tags: 'balloon birthday party' },
+      { emoji: '🎂', cat: 'fun', tags: 'birthday cake bday happy birthday' },
+      { emoji: '🎁', cat: 'fun', tags: 'wrapped gift present surprise box' },
+      { emoji: '🏆', cat: 'fun', tags: 'trophy champion win winner gold' },
+      { emoji: '🥇', cat: 'fun', tags: '1st place medal gold winner first' },
+      { emoji: '🥈', cat: 'fun', tags: '2nd place medal silver' },
+      { emoji: '🥉', cat: 'fun', tags: '3rd place medal bronze' },
+      { emoji: '🎯', cat: 'fun', tags: 'direct hit bullseye target goal' },
+      { emoji: '🎮', cat: 'fun', tags: 'video game gaming controller play' },
+      { emoji: '🎲', cat: 'fun', tags: 'game die dice luck gamble' },
+      { emoji: '🎵', cat: 'fun', tags: 'musical note music song melody' },
+      { emoji: '🎶', cat: 'fun', tags: 'musical notes audio sound' },
+      { emoji: '🎸', cat: 'fun', tags: 'guitar rock instrument' },
+      { emoji: '📱', cat: 'fun', tags: 'mobile phone cell smartphone' },
+      { emoji: '💻', cat: 'fun', tags: 'laptop computer tech code developer' },
+
+      // Symbols
+      { emoji: '🔥', cat: 'symbols', tags: 'fire lit flame hot burn trend' },
+      { emoji: '💯', cat: 'symbols', tags: 'hundred score points keep it 100 perfect' },
+      { emoji: '✨', cat: 'symbols', tags: 'sparkles clean magic new shiny' },
+      { emoji: '🌟', cat: 'symbols', tags: 'glowing star bright famous' },
+      { emoji: '⭐', cat: 'symbols', tags: 'star favorite rating' },
+      { emoji: '⚡', cat: 'symbols', tags: 'high voltage lightning bolt thunder electric fast' },
+      { emoji: '💥', cat: 'symbols', tags: 'collision boom blast impact explosion' },
+      { emoji: '💢', cat: 'symbols', tags: 'anger symbol vein mad' },
+      { emoji: '💡', cat: 'symbols', tags: 'light bulb idea bright smart tip' },
+      { emoji: '✅', cat: 'symbols', tags: 'check mark button correct done verify' },
+      { emoji: '❌', cat: 'symbols', tags: 'cross mark cancel delete error wrong no' },
+      { emoji: '⚠️', cat: 'symbols', tags: 'warning caution alert danger' },
+      { emoji: '🚨', cat: 'symbols', tags: 'police car light emergency alert siren' },
+      { emoji: '📌', cat: 'symbols', tags: 'pushpin pin remember important note' },
+      { emoji: '🔒', cat: 'symbols', tags: 'locked security privacy safe' },
+      { emoji: '🔓', cat: 'symbols', tags: 'unlocked open access' },
+      { emoji: '⏳', cat: 'symbols', tags: 'hourglass time wait loading' },
+      { emoji: '⌛', cat: 'symbols', tags: 'hourglass done time up' },
+    ];
+
+    function openCustomEmojiPicker(messageId, participant, fromMe) {
+      pendingEmojiTarget = { messageId, participant, fromMe };
+      const msg = currentMessages.find((m) => m.id === messageId);
+      const label = document.getElementById('custom-emoji-target-label');
+      if (label) {
+        const preview = msg ? (msg.text ? `"${msg.text.slice(0, 30)}..."` : (msg.media ? `[${msg.media.kind}]` : '')) : '';
+        label.textContent = preview;
+      }
+      const searchInput = document.getElementById('emoji-search-input');
+      if (searchInput) searchInput.value = '';
+      currentEmojiCategory = 'all';
+      document.querySelectorAll('#emoji-category-tabs .chip-emoji-cat').forEach((c, idx) => {
+        c.classList.toggle('active', idx === 0);
+      });
+      renderCustomEmojiGrid(EMOJI_DATABASE);
+      openModal('modal-custom-emoji');
+      if (searchInput) setTimeout(() => searchInput.focus(), 100);
+    }
+
+    function selectEmojiCategory(cat, el) {
+      currentEmojiCategory = cat;
+      document.querySelectorAll('#emoji-category-tabs .chip-emoji-cat').forEach((c) => c.classList.remove('active'));
+      if (el) el.classList.add('active');
+      filterCustomEmojis();
+    }
+
+    function filterCustomEmojis() {
+      const q = (document.getElementById('emoji-search-input').value || '').trim().toLowerCase();
+      let filtered = EMOJI_DATABASE;
+      if (currentEmojiCategory !== 'all') {
+        filtered = filtered.filter((item) => item.cat === currentEmojiCategory);
+      }
+      if (q) {
+        filtered = filtered.filter((item) => item.emoji.includes(q) || item.tags.toLowerCase().includes(q));
+      }
+      renderCustomEmojiGrid(filtered);
+    }
+
+    function renderCustomEmojiGrid(list) {
+      const container = document.getElementById('emoji-grid-container');
+      if (!container) return;
+      if (!list.length) {
+        container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--text-dim);font-size:12.5px;">No emojis matched search.</div>`;
+        return;
+      }
+      container.innerHTML = list
+        .map(
+          (item) => `
+        <button class="custom-emoji-btn" onclick="sendCustomEmojiReaction('${item.emoji}')" title="${escapeHtml(item.tags)}">
+          ${item.emoji}
+        </button>
+      `
+        )
+        .join('');
+    }
+
+    async function sendCustomEmojiReaction(emoji) {
+      if (!pendingEmojiTarget || !selectedChat) {
+        closeModal('modal-custom-emoji');
+        return;
+      }
+      const { messageId, participant, fromMe } = pendingEmojiTarget;
+      closeModal('modal-custom-emoji');
+      await sendEmojiReaction(messageId, emoji, participant, fromMe);
+      if (emoji) {
+        showToast(`Reacted with ${emoji}`);
+      } else {
+        showToast('Reaction removed');
+      }
+    }
+
+    // --- Message Information Modal Engine ---
+    let currentInfoMessage = null;
+
+    function showMessageInfo(messageId) {
+      const msg = currentMessages.find((m) => m.id === messageId);
+      if (!msg) {
+        showToast('Message not found in current view.');
+        return;
+      }
+      currentInfoMessage = msg;
+
+      const contentEl = document.getElementById('message-info-content');
+      if (!contentEl) return;
+
+      const isOut = Boolean(msg.fromMe);
+      const exactDate = msg.timestamp ? new Date(msg.timestamp).toLocaleString([], { dateStyle: 'full', timeStyle: 'medium' }) : 'Unknown';
+      const isoDate = msg.timestamp || 'Unknown';
+      const senderDisplay = msg.senderName || msg.senderNumber || (isOut ? 'You (Bot)' : 'Sender');
+      const senderPhone = msg.senderNumber ? `+${msg.senderNumber}` : 'N/A';
+      const senderJid = msg.senderJid || 'N/A';
+      const chatJid = msg.chatJid || (selectedChat ? selectedChat.id : 'N/A');
+
+      // Reactions breakdown
+      let reactionsSection = '';
+      if (msg.reactions && Object.keys(msg.reactions).length > 0) {
+        const rows = Object.entries(msg.reactions)
+          .map(
+            ([emoji, count]) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:12px;">
+            <span style="font-size:16px;">${emoji}</span>
+            <span style="color:var(--text-muted);font-weight:600;">${count} reaction${count > 1 ? 's' : ''}</span>
+          </div>
+        `
+          )
+          .join('');
+
+        reactionsSection = `
+          <div class="info-card-section">
+            <div class="info-card-header">Reactions Received (${Object.keys(msg.reactions).length})</div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              ${rows}
+            </div>
+          </div>
+        `;
+      }
+
+      // Preview box
+      let previewText = msg.text ? escapeHtml(msg.text) : '';
+      if (msg.media) {
+        previewText += `<div style="font-size:11px;color:#38bdf8;margin-top:4px;">[${msg.media.kind.toUpperCase()}] ${escapeHtml(msg.media.fileName || '')} (${msg.media.size ? Math.round(msg.media.size / 1024) + ' KB' : ''})</div>`;
+      }
+      if (msg.poll) {
+        previewText += `<div style="font-size:11px;color:#a855f7;margin-top:4px;">[POLL] ${escapeHtml(msg.poll.name)} (${msg.poll.options?.length || 0} options)</div>`;
+      }
+      if (msg.location) {
+        previewText += `<div style="font-size:11px;color:#10b981;margin-top:4px;">[LOCATION] ${escapeHtml(msg.location.name || `${msg.location.degreesLatitude}, ${msg.location.degreesLongitude}`)}</div>`;
+      }
+
+      contentEl.innerHTML = `
+        <!-- Message Snippet Preview -->
+        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 12px;position:relative;">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
+            <span>${isOut ? 'Outgoing Message' : 'Incoming Message'}</span>
+            <span style="color:${isOut ? '#38bdf8' : '#34d399'};font-weight:700;">${isOut ? '✓✓ Sent' : 'Received'}</span>
+          </div>
+          <div style="font-size:13px;color:var(--text);white-space:pre-wrap;max-height:100px;overflow-y:auto;">
+            ${previewText || '<span style="color:var(--text-dim);font-style:italic;">No text payload</span>'}
+          </div>
+        </div>
+
+        <!-- Status & Timestamps -->
+        <div class="info-card-section">
+          <div class="info-card-header">Status &amp; Timing</div>
+          <div class="info-row">
+            <span class="info-label">Direction</span>
+            <span class="info-val">${isOut ? '📤 Outgoing (Bot/You)' : '📥 Incoming'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Local Time</span>
+            <span class="info-val">${exactDate}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">ISO Timestamp</span>
+            <span class="info-val" title="${isoDate}">
+              <span>${isoDate}</span>
+              <button class="btn-copy-mini" onclick="copyToClipboard('${isoDate}', 'Timestamp copied!')">Copy</button>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Delivery Status</span>
+            <span class="info-val">${isOut ? '✓✓ Read / Delivered' : '✓✓ Intercepted'}</span>
+          </div>
+        </div>
+
+        <!-- Participant & Sender Details -->
+        <div class="info-card-section">
+          <div class="info-card-header">Sender &amp; Chat Details</div>
+          <div class="info-row">
+            <span class="info-label">Sender Name</span>
+            <span class="info-val">${escapeHtml(senderDisplay)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Phone Number</span>
+            <span class="info-val">${escapeHtml(senderPhone)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Sender JID</span>
+            <span class="info-val" title="${senderJid}">
+              <span>${escapeHtml(senderJid)}</span>
+              <button class="btn-copy-mini" onclick="copyToClipboard('${senderJid}', 'Sender JID copied!')">Copy</button>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Chat JID</span>
+            <span class="info-val" title="${chatJid}">
+              <span>${escapeHtml(chatJid)}</span>
+              <button class="btn-copy-mini" onclick="copyToClipboard('${chatJid}', 'Chat JID copied!')">Copy</button>
+            </span>
+          </div>
+        </div>
+
+        <!-- Protocol & Wire Details -->
+        <div class="info-card-section">
+          <div class="info-card-header">WhatsApp Protocol &amp; Wire Attributes</div>
+          <div class="info-row">
+            <span class="info-label">Stanza Message ID</span>
+            <span class="info-val" title="${msg.id}">
+              <span>${escapeHtml(msg.id)}</span>
+              <button class="btn-copy-mini" onclick="copyToClipboard('${msg.id}', 'Message ID copied!')">Copy</button>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Protocol Type</span>
+            <span class="info-val"><code style="color:#38bdf8;">${escapeHtml(msg.type || 'conversation')}</code></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">View-Once Media</span>
+            <span class="info-val">${msg.isViewOnce ? '<span style="color:#fb7185;font-weight:700;">🔥 Yes (View Once)</span>' : 'No'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Revocation Status</span>
+            <span class="info-val">${msg.isDeleted ? '<span style="color:#fb7185;font-weight:700;">🗑️ Deleted by Remote</span>' : 'Active (Clean)'}</span>
+          </div>
+          ${msg.quoted ? `
+          <div class="info-row">
+            <span class="info-label">Replying To ID</span>
+            <span class="info-val" title="${msg.quoted.id}">
+              <span>${escapeHtml(msg.quoted.id)}</span>
+              <button class="btn-copy-mini" onclick="copyToClipboard('${msg.quoted.id}', 'Quoted ID copied!')">Copy</button>
+            </span>
+          </div>
+          ` : ''}
+        </div>
+
+        ${reactionsSection}
+      `;
+
+      openModal('modal-message-info');
+    }
+
+    function copyRawMessageJson() {
+      if (!currentInfoMessage) return;
+      copyToClipboard(JSON.stringify(currentInfoMessage, null, 2), 'Full message JSON copied!');
+    }
+
     // --- Revoke Message ---
     async function revokeChatMessage(messageId, participant, fromMe) {
       if (!selectedChat) return;
@@ -4524,6 +5173,20 @@
       });
 
       socket.on('chat:message', (msg) => {
+        // Auto-bump conversation to top in sidebar with latest timestamp and snippet
+        const snippet = msg.text || (msg.media ? `[${msg.media.kind}]` : '') || (msg.poll ? `[Poll: ${msg.poll.name}]` : '') || '';
+        const targetGroup = chatsCache.groups.find((g) => g.id === msg.chatJid);
+        const targetDirect = chatsCache.directChats.find((d) => d.id === msg.chatJid);
+        const targetChat = targetGroup || targetDirect;
+
+        if (targetChat) {
+          targetChat.lastActive = msg.timestamp || new Date().toISOString();
+          targetChat.lastMessage = snippet;
+          renderChatList();
+        } else {
+          fetchChats();
+        }
+
         if (selectedChat && msg.chatJid === selectedChat.id) {
           const existingIdx = currentMessages.findIndex((m) => m.id === msg.id);
           if (existingIdx !== -1) {
@@ -4534,6 +5197,20 @@
           const bodyEl = document.getElementById('chat-view-body-el');
           const isAtBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 140;
           renderMessagesList(isAtBottom);
+        }
+      });
+
+      socket.on('contacts:updated', () => {
+        fetchChats();
+      });
+
+      socket.on('chat:message-deleted', (data) => {
+        if (selectedChat && data.chatJid === selectedChat.id) {
+          const target = currentMessages.find((m) => m.id === data.messageId);
+          if (target) {
+            target.isDeleted = true;
+            renderMessagesList(false);
+          }
         }
       });
 

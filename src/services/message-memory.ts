@@ -8,6 +8,7 @@ import type { SenderIdentity } from '../types';
 type StoredContact = {
   jid: string;
   phoneNumber: string;
+  savedName?: string;
   profileName?: string;
   displayName: string;
   updatedAt: string;
@@ -79,12 +80,52 @@ function senderJid(message: WAMessage, socket: WASocket): string {
   return message.key.fromMe ? userJid || remoteJid : remoteJid;
 }
 
+export function syncContacts(newContacts: Array<{ id?: string; name?: string; notify?: string; verifiedName?: string }>): void {
+  if (!Array.isArray(newContacts) || !newContacts.length) return;
+  const stored = readContacts();
+  let changed = false;
+
+  for (const c of newContacts) {
+    if (!c || !c.id || c.id.endsWith('@g.us') || c.id.endsWith('@newsletter')) continue;
+    const jid = c.id.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+    const phone = jidNumber(jid);
+    const savedName = cleanName(c.name);
+    const pushName = cleanName(c.notify);
+    const verified = cleanName(c.verifiedName);
+    const existing = stored[jid];
+
+    const chosenName = savedName || existing?.savedName || verified || pushName || existing?.profileName || phone || jid;
+
+    if (
+      !existing ||
+      (savedName && existing.savedName !== savedName) ||
+      (pushName && existing.profileName !== pushName) ||
+      existing.displayName !== chosenName
+    ) {
+      stored[jid] = {
+        jid,
+        phoneNumber: phone,
+        savedName: savedName || existing?.savedName,
+        profileName: pushName || existing?.profileName,
+        displayName: chosenName,
+        updatedAt: new Date().toISOString(),
+      };
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    saveContacts();
+    logger.info({ count: newContacts.length }, 'Synced primary phone contacts into contact store');
+  }
+}
+
 export function getSenderIdentity(message: WAMessage, socket: WASocket): SenderIdentity {
   const jid = senderJid(message, socket);
   const stored = readContacts()[jid];
   const profileName = cleanName(message.pushName) || (message.key.fromMe ? cleanName(socket.user?.name) || config.OWNER_NAME : stored?.profileName);
   const phoneNumber = jidNumber(jid) || stored?.phoneNumber || jid;
-  const displayName = profileName || phoneNumber || jid;
+  const displayName = stored?.savedName || stored?.displayName || profileName || phoneNumber || jid;
   const identity: SenderIdentity = {
     jid,
     phoneNumber,
@@ -103,6 +144,7 @@ export function getSenderIdentity(message: WAMessage, socket: WASocket): SenderI
     readContacts()[jid] = {
       jid,
       phoneNumber,
+      savedName: stored?.savedName,
       profileName,
       displayName,
       updatedAt: new Date().toISOString(),

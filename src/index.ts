@@ -32,6 +32,7 @@ import { initApiServer } from './core/api-server';
 import { ConnectionManager } from './core/connection-manager';
 import logger from './core/logger';
 import { MessageHandler } from './core/message-handler';
+import { syncContacts } from './services/message-memory';
 
 async function main() {
   logger.info('Starting WhatsApp Hybrid Bot...');
@@ -131,6 +132,35 @@ async function main() {
           apiServer.handleGroupsUpdate(updates);
         } catch (grpErr) {
           logger.debug({ grpErr }, 'Failed to handle groups update in dashboard');
+        }
+      });
+
+      socket.ev.on('contacts.upsert', (newContacts) => {
+        try {
+          syncContacts(newContacts);
+          apiServer.handleContactsSync(newContacts);
+        } catch (cErr) {
+          logger.debug({ cErr }, 'Failed to sync contacts upsert');
+        }
+      });
+
+      socket.ev.on('contacts.update', (updates) => {
+        try {
+          syncContacts(updates as any);
+          apiServer.handleContactsSync(updates as any);
+        } catch (cErr) {
+          logger.debug({ cErr }, 'Failed to sync contacts update');
+        }
+      });
+
+      socket.ev.on('messaging-history.set', ({ contacts }) => {
+        try {
+          if (contacts && contacts.length) {
+            syncContacts(contacts);
+            apiServer.handleContactsSync(contacts);
+          }
+        } catch (cErr) {
+          logger.debug({ cErr }, 'Failed to sync messaging-history contacts');
         }
       });
 
