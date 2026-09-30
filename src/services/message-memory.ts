@@ -39,15 +39,14 @@ function ensureDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function readContacts(): Record<string, StoredContact> {
-  if (contacts) return contacts;
-
+export function readContacts(): Record<string, StoredContact> {
   try {
-    contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf8')) as Record<string, StoredContact>;
-  } catch {
-    contacts = {};
-  }
-
+    if (fs.existsSync(contactsPath)) {
+      contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf8')) as Record<string, StoredContact>;
+      return contacts;
+    }
+  } catch {}
+  if (!contacts) contacts = {};
   return contacts;
 }
 
@@ -73,21 +72,38 @@ function senderJid(message: WAMessage, socket: WASocket): string {
   const remoteJid = message.key.remoteJid || '';
   const userJid = socket.user?.id || '';
 
-  if (remoteJid.endsWith('@g.us')) {
+  if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') {
     return message.key.participant || (message.key.fromMe ? userJid : remoteJid);
   }
 
   return message.key.fromMe ? userJid || remoteJid : remoteJid;
 }
 
-export function syncContacts(newContacts: Array<{ id?: string; name?: string; notify?: string; verifiedName?: string }>): void {
+export function syncContacts(newContacts: Array<{ id?: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }>): void {
   if (!Array.isArray(newContacts) || !newContacts.length) return;
   const stored = readContacts();
   let changed = false;
 
   for (const c of newContacts) {
-    if (!c || !c.id || c.id.endsWith('@g.us') || c.id.endsWith('@newsletter')) continue;
-    const jid = c.id.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+    if (!c) continue;
+    let rawJid = c.jid || c.id || '';
+    if (!rawJid || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter') || rawJid === 'status@broadcast') continue;
+
+    let jid = '';
+    if (rawJid.endsWith('@s.whatsapp.net')) {
+      jid = rawJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+    } else if (rawJid.endsWith('@lid')) {
+      if (c.jid && c.jid.endsWith('@s.whatsapp.net')) {
+        jid = c.jid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+      } else {
+        jid = rawJid;
+      }
+    } else if (/^\d+$/.test(rawJid)) {
+      jid = `${rawJid}@s.whatsapp.net`;
+    } else {
+      jid = rawJid;
+    }
+
     const phone = jidNumber(jid);
     const savedName = cleanName(c.name);
     const pushName = cleanName(c.notify);
@@ -116,7 +132,53 @@ export function syncContacts(newContacts: Array<{ id?: string; name?: string; no
 
   if (changed) {
     saveContacts();
-    logger.info({ count: newContacts.length }, 'Synced primary phone contacts into contact store');
+    logger.info({ count: Object.keys(stored).length }, 'Updated primary phone contacts in contact store');
+  }
+}
+
+export async function triggerFullContactSync(socket: WASocket): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    const collections: string[] = ['critical_unblock_low', 'regular_low', 'regular_high', 'regular', 'critical_block'];
+
+    // Reset versions to 0 in auth state files so Baileys requests full snapshot from WhatsApp servers
+    for (const name of collections) {
+      const vFile = path.join(config.SESSION_PATH, `app-state-sync-version-${name}.json`);
+      if (fs.existsSync(vFile)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(vFile, 'utf8'));
+          content.version = 0;
+          fs.writeFileSync(vFile, JSON.stringify(content));
+        } catch {}
+      }
+    }
+
+    logger.info('Requesting full app-state contact snapshot from primary phone...');
+    if (typeof (socket as any).resyncAppState === 'function') {
+      await (socket as any).resyncAppState(['critical_unblock_low', 'regular_low', 'regular_high', 'regular'], true);
+    }
+
+    // Also resync any contacts from all participating groups
+    try {
+      const groupsMap = await socket.groupFetchAllParticipating();
+      const groupContacts: any[] = [];
+      for (const meta of Object.values(groupsMap)) {
+        for (const p of meta.participants || []) {
+          if (p.id && !p.id.endsWith('@g.us')) {
+            groupContacts.push({ id: p.id });
+          }
+        }
+      }
+      if (groupContacts.length) {
+        syncContacts(groupContacts);
+      }
+    } catch {}
+
+    const count = Object.keys(readContacts()).length;
+    logger.info({ count }, 'Full contact synchronization completed');
+    return { success: true, count };
+  } catch (err: any) {
+    logger.warn({ err }, 'Error during triggerFullContactSync');
+    return { success: false, count: Object.keys(readContacts()).length, error: err?.message };
   }
 }
 

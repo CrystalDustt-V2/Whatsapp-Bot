@@ -369,10 +369,79 @@
       border-radius: 14px;
       cursor: pointer;
     }
-    .chip.active {
-      background: rgba(6, 182, 212, 0.18);
-      border-color: rgba(6, 182, 212, 0.4);
+    .chip-count {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
+      padding: 0 5px;
+      border-radius: 8px;
+      font-size: 10px;
+      margin-left: 4px;
+    }
+    .chip.active .chip-count {
+      background: rgba(6, 182, 212, 0.35);
       color: #38bdf8;
+    }
+    .chat-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px 6px;
+      margin-top: 10px;
+      margin-bottom: 4px;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      user-select: none;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .chat-section-header:first-child {
+      margin-top: 0;
+    }
+    .chat-section-header:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+    }
+    .chat-section-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chat-section-badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 10px;
+    }
+    .chat-section-toggle {
+      font-size: 10px;
+      color: var(--text-muted);
+      transition: transform 0.2s;
+    }
+    .tag-channel {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+    .tag-broadcast {
+      background: rgba(236, 72, 153, 0.15);
+      color: #f472b6;
+      border: 1px solid rgba(236, 72, 153, 0.3);
+    }
+    @keyframes spinKeyframe {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spin-animation {
+      display: inline-block;
+      animation: spinKeyframe 0.9s linear infinite;
     }
 
     .chat-scroll {
@@ -1250,16 +1319,20 @@
           <!-- Left: Chat List -->
           <div class="chat-list-pane">
             <div class="chat-search-bar">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
                 <span style="font-weight:700;font-size:14px;color:var(--text);">Chats & Groups</span>
-                <button class="btn btn-secondary" style="padding:4px 8px;font-size:11.5px;" onclick="openNewChatModal()">+ Direct JID</button>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <button class="btn btn-secondary" id="btn-sync-contacts" style="padding:4px 8px;font-size:11.5px;display:inline-flex;align-items:center;gap:4px;" onclick="triggerManualContactSync()" title="Auto-sync every saved contact from primary phone"><span id="sync-contacts-icon">🔄</span> Sync Contacts</button>
+                  <button class="btn btn-secondary" style="padding:4px 8px;font-size:11.5px;" onclick="openNewChatModal()">+ Direct JID</button>
+                </div>
               </div>
-              <input type="text" id="chat-search-input" placeholder="Search chats and groups..." oninput="renderChatList()">
+              <input type="text" id="chat-search-input" placeholder="Search chats, groups, channels, contacts..." oninput="renderChatList()">
               <div class="filter-chips">
-                <span class="chip active" onclick="setChatFilter('all', this)">All</span>
-                <span class="chip" onclick="setChatFilter('groups', this)">Groups</span>
-                <span class="chip" onclick="setChatFilter('admin-only', this)">Admin-Only</span>
-                <span class="chip" onclick="setChatFilter('dms', this)">DMs</span>
+                <span class="chip active" onclick="setChatFilter('all', this)">All <span id="chip-count-all" class="chip-count"></span></span>
+                <span class="chip" onclick="setChatFilter('dms', this)">💬 DMs <span id="chip-count-dms" class="chip-count"></span></span>
+                <span class="chip" onclick="setChatFilter('groups', this)">👥 Groups <span id="chip-count-groups" class="chip-count"></span></span>
+                <span class="chip" onclick="setChatFilter('channels', this)">📢 Channels <span id="chip-count-channels" class="chip-count"></span></span>
+                <span class="chip" onclick="setChatFilter('admin-only', this)">🔒 Admin <span id="chip-count-admin" class="chip-count"></span></span>
               </div>
             </div>
             <div id="chat-items-list" class="chat-scroll">
@@ -2120,7 +2193,8 @@
   <!-- Dashboard JavaScript Engine -->
   <script>
     let socket = null;
-    let chatsCache = { groups: [], directChats: [] };
+    let chatsCache = { groups: [], directChats: [], broadcasts: [] };
+    let chatSectionsCollapsed = { dms: false, groups: false, broadcasts: false };
     let currentChatFilter = 'all';
     let selectedChat = null;
     let currentVaultView = 'vo';
@@ -2272,13 +2346,61 @@
         if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
-          chatsCache = { groups: data.groups || [], directChats: data.directChats || [] };
+          chatsCache = {
+            groups: data.groups || [],
+            directChats: data.directChats || [],
+            broadcasts: data.broadcasts || [],
+          };
+          updateChipCounts();
           renderChatList();
           populateDestinationDropdowns();
           populateBroadcastList();
         }
       } catch (err) {
         console.error('Fetch chats error:', err);
+      }
+    }
+
+    function updateChipCounts() {
+      const dmsCount = (chatsCache.directChats || []).length;
+      const groupsCount = (chatsCache.groups || []).length;
+      const channelsCount = (chatsCache.broadcasts || []).length;
+      const adminCount = (chatsCache.groups || []).filter(g => g.isAnnounce).length;
+      const allCount = dmsCount + groupsCount + channelsCount;
+
+      const setEl = (id, count) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = count ? count : '';
+      };
+      setEl('chip-count-all', allCount);
+      setEl('chip-count-dms', dmsCount);
+      setEl('chip-count-groups', groupsCount);
+      setEl('chip-count-channels', channelsCount);
+      setEl('chip-count-admin', adminCount);
+    }
+
+    async function triggerManualContactSync() {
+      const btn = document.getElementById('btn-sync-contacts');
+      const icon = document.getElementById('sync-contacts-icon');
+      if (btn) btn.disabled = true;
+      if (icon) icon.classList.add('spin-animation');
+
+      showToast('Syncing full address book from primary phone...');
+
+      try {
+        const res = await fetch('/api/contacts/sync', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Address book synced! Loaded ${data.count || 0} saved contacts.`);
+          await fetchChats();
+        } else {
+          showToast(data.error || 'Failed to sync contacts.');
+        }
+      } catch (err) {
+        showToast('Network error during contact sync.');
+      } finally {
+        if (btn) btn.disabled = false;
+        if (icon) icon.classList.remove('spin-animation');
       }
     }
 
@@ -2292,86 +2414,226 @@
     function formatChatTime(isoString) {
       if (!isoString) return '';
       const date = new Date(isoString);
-      if (isNaN(date.getTime())) return '';
-      const now = new Date();
-      const isToday = date.toDateString() === now.toDateString();
+      const time = date.getTime();
+      if (isNaN(time) || time <= 0) return '';
+
+      const now = Date.now();
+      const diffMs = now - time;
+      if (diffMs < 0) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+
+      const diffSec = Math.floor(diffMs / 1000);
+      if (diffSec < 60) return 'Just now';
+
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return `${diffMin}m ago`;
+
+      const nowDate = new Date(now);
+      if (date.toDateString() === nowDate.toDateString()) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+
       const yesterday = new Date(now);
       yesterday.setDate(yesterday.getDate() - 1);
-      const isYesterday = date.toDateString() === yesterday.toDateString();
-      if (isToday) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-      } else if (isYesterday) {
+      if (date.toDateString() === yesterday.toDateString()) {
         return 'Yesterday';
-      } else {
-        return date.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
       }
+
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      if (diffDays < 7) {
+        return date.toLocaleDateString([], { weekday: 'short' });
+      }
+
+      return date.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+    }
+
+    function toggleChatSection(sec) {
+      chatSectionsCollapsed[sec] = !chatSectionsCollapsed[sec];
+      renderChatList();
+    }
+
+    function sortChatsByLatest(list) {
+      return [...list].sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
+    }
+
+    function filterBySearch(items, search) {
+      if (!search) return items;
+      return items.filter(i =>
+        (i.name || '').toLowerCase().includes(search) ||
+        (i.savedName || '').toLowerCase().includes(search) ||
+        (i.phoneNumber || '').includes(search) ||
+        (i.id || '').includes(search) ||
+        (i.lastMessage || '').toLowerCase().includes(search)
+      );
+    }
+
+    function renderChatItem(item, isGroup, isBroadcast) {
+      const isSel = selectedChat && selectedChat.id === item.id;
+      let icon = '👤';
+      if (isGroup) icon = '👥';
+      else if (isBroadcast || item.id === 'status@broadcast' || item.id?.endsWith('@newsletter') || item.id?.endsWith('@broadcast')) {
+        icon = item.id === 'status@broadcast' ? '🟣' : '📢';
+      }
+
+      let badges = '';
+      if (item.isAnnounce) badges += `<span class="tag-pill tag-admin-only">Admin Only</span>`;
+      if (item.isBotAdmin) badges += `<span class="tag-pill tag-bot-admin">Bot Admin</span>`;
+      if (isBroadcast || item.isBroadcast) {
+        if (item.id === 'status@broadcast') {
+          badges += `<span class="tag-pill tag-status">Status</span>`;
+        } else {
+          badges += `<span class="tag-pill tag-channel">Channel</span>`;
+        }
+      }
+
+      const displayName = item.savedName || item.name || item.id;
+      const timeStr = formatChatTime(item.lastActive);
+      const lastMsgPreview = item.lastMessage ? escapeHtml(item.lastMessage) : '';
+
+      let subText = '';
+      if (isGroup) {
+        subText = `${item.participantsCount || 0} members`;
+      } else if (isBroadcast || item.isBroadcast) {
+        subText = item.id === 'status@broadcast' ? 'WhatsApp Status Updates' : 'Broadcast Channel';
+      } else {
+        subText = item.phoneNumber ? `+${item.phoneNumber}` : 'Direct';
+      }
+
+      return `
+        <div class="chat-item ${isSel ? 'selected' : ''}" data-last-active="${item.lastActive || ''}" onclick="selectChat('${item.id}', ${Boolean(isGroup)}, ${Boolean(isBroadcast)})">
+          <div class="chat-item-avatar">${icon}</div>
+          <div class="chat-item-info">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+              <div class="chat-item-title" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</div>
+              ${timeStr ? `<span class="chat-item-time" style="font-size:10.5px;color:var(--text-dim);flex-shrink:0;">${timeStr}</span>` : '<span class="chat-item-time"></span>'}
+            </div>
+            ${lastMsgPreview ? `<div style="font-size:11.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${lastMsgPreview}</div>` : ''}
+            <div class="chat-item-sub">
+              ${badges}
+              ${item.savedName ? `<span style="color:#38bdf8;font-size:10px;background:rgba(56,189,248,0.12);padding:1px 5px;border-radius:4px;" title="Synced from primary phone address book">Synced</span>` : ''}
+              <span>${subText}</span>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     function renderChatList() {
       const listEl = document.getElementById('chat-items-list');
-      const search = (document.getElementById('chat-search-input').value || '').toLowerCase();
+      const search = (document.getElementById('chat-search-input').value || '').toLowerCase().trim();
 
-      let items = [];
+      const dms = sortChatsByLatest(filterBySearch(chatsCache.directChats || [], search));
+      const groups = sortChatsByLatest(filterBySearch(chatsCache.groups || [], search));
+      const broadcasts = sortChatsByLatest(filterBySearch(chatsCache.broadcasts || [], search));
+
       if (currentChatFilter === 'all') {
-        items = [...chatsCache.groups, ...chatsCache.directChats];
-      } else if (currentChatFilter === 'groups') {
-        items = [...chatsCache.groups];
-      } else if (currentChatFilter === 'admin-only') {
-        items = chatsCache.groups.filter(g => g.isAnnounce);
-      } else if (currentChatFilter === 'dms') {
-        items = [...chatsCache.directChats];
-      }
+        if (!dms.length && !groups.length && !broadcasts.length) {
+          listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No matching chats found.</div>`;
+          return;
+        }
 
-      if (search) {
-        items = items.filter(i =>
-          (i.name || '').toLowerCase().includes(search) ||
-          (i.savedName || '').toLowerCase().includes(search) ||
-          (i.phoneNumber || '').includes(search) ||
-          (i.id || '').includes(search)
-        );
-      }
+        let html = '';
 
-      // Sort items by latest date/activity descending
-      items.sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
+        // 1. Direct Messages (DMs)
+        if (dms.length || !search) {
+          const isCollapsed = chatSectionsCollapsed.dms;
+          html += `
+            <div class="chat-section-header" onclick="toggleChatSection('dms')">
+              <div class="chat-section-title">
+                <span>💬 Direct Messages</span>
+                <span class="chat-section-badge">${dms.length}</span>
+              </div>
+              <span class="chat-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+            </div>
+          `;
+          if (!isCollapsed) {
+            html += dms.length
+              ? dms.map(i => renderChatItem(i, false, false)).join('')
+              : `<div style="padding:10px 14px;color:var(--text-muted);font-size:11.5px;font-style:italic;">No direct messages yet</div>`;
+          }
+        }
 
-      if (!items.length) {
-        listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No matching chats found.</div>`;
+        // 2. Group Chats
+        if (groups.length || !search) {
+          const isCollapsed = chatSectionsCollapsed.groups;
+          html += `
+            <div class="chat-section-header" onclick="toggleChatSection('groups')">
+              <div class="chat-section-title">
+                <span>👥 Group Chats</span>
+                <span class="chat-section-badge">${groups.length}</span>
+              </div>
+              <span class="chat-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+            </div>
+          `;
+          if (!isCollapsed) {
+            html += groups.length
+              ? groups.map(i => renderChatItem(i, true, false)).join('')
+              : `<div style="padding:10px 14px;color:var(--text-muted);font-size:11.5px;font-style:italic;">No groups found</div>`;
+          }
+        }
+
+        // 3. Channels & Broadcasts
+        if (broadcasts.length || !search) {
+          const isCollapsed = chatSectionsCollapsed.broadcasts;
+          html += `
+            <div class="chat-section-header" onclick="toggleChatSection('broadcasts')">
+              <div class="chat-section-title">
+                <span>📢 Channel Broadcasts</span>
+                <span class="chat-section-badge">${broadcasts.length}</span>
+              </div>
+              <span class="chat-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+            </div>
+          `;
+          if (!isCollapsed) {
+            html += broadcasts.length
+              ? broadcasts.map(i => renderChatItem(i, false, true)).join('')
+              : `<div style="padding:10px 14px;color:var(--text-muted);font-size:11.5px;font-style:italic;">No channel broadcasts</div>`;
+          }
+        }
+
+        listEl.innerHTML = html;
         return;
       }
 
-      listEl.innerHTML = items.map(item => {
-        const isSel = selectedChat && selectedChat.id === item.id;
-        const icon = item.isGroup ? '👥' : '👤';
-        const isAnnounce = item.isAnnounce;
-        const isBotAdmin = item.isBotAdmin;
-
-        let badges = '';
-        if (isAnnounce) badges += `<span class="tag-pill tag-admin-only">Admin Only</span>`;
-        if (isBotAdmin) badges += `<span class="tag-pill tag-bot-admin">Bot Admin</span>`;
-
-        const displayName = item.savedName || item.name || item.id;
-        const timeStr = formatChatTime(item.lastActive);
-        const lastMsgPreview = item.lastMessage ? escapeHtml(item.lastMessage) : '';
-
-        return `
-          <div class="chat-item ${isSel ? 'selected' : ''}" onclick="selectChat('${item.id}', ${item.isGroup})">
-            <div class="chat-item-avatar">${icon}</div>
-            <div class="chat-item-info">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-                <div class="chat-item-title" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</div>
-                ${timeStr ? `<span style="font-size:10.5px;color:var(--text-dim);flex-shrink:0;">${timeStr}</span>` : ''}
-              </div>
-              ${lastMsgPreview ? `<div style="font-size:11.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${lastMsgPreview}</div>` : ''}
-              <div class="chat-item-sub">
-                ${badges}
-                ${item.savedName ? `<span style="color:#38bdf8;font-size:10px;background:rgba(56,189,248,0.12);padding:1px 5px;border-radius:4px;" title="Synced from primary phone address book">Synced</span>` : ''}
-                <span>${item.isGroup ? `${item.participantsCount || 0} members` : (item.phoneNumber ? `+${item.phoneNumber}` : 'Direct')}</span>
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
+      if (currentChatFilter === 'dms') {
+        if (!dms.length) {
+          listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No direct messages found.</div>`;
+          return;
+        }
+        listEl.innerHTML = dms.map(i => renderChatItem(i, false, false)).join('');
+      } else if (currentChatFilter === 'groups') {
+        if (!groups.length) {
+          listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No group chats found.</div>`;
+          return;
+        }
+        listEl.innerHTML = groups.map(i => renderChatItem(i, true, false)).join('');
+      } else if (currentChatFilter === 'channels') {
+        if (!broadcasts.length) {
+          listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No channel broadcasts found.</div>`;
+          return;
+        }
+        listEl.innerHTML = broadcasts.map(i => renderChatItem(i, false, true)).join('');
+      } else if (currentChatFilter === 'admin-only') {
+        const adminGroups = groups.filter(g => g.isAnnounce);
+        if (!adminGroups.length) {
+          listEl.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text-dim);font-size:13px;">No admin-only groups found.</div>`;
+          return;
+        }
+        listEl.innerHTML = adminGroups.map(i => renderChatItem(i, true, false)).join('');
+      }
     }
+
+    // Auto-update relative times every 30 seconds
+    setInterval(() => {
+      document.querySelectorAll('.chat-item[data-last-active]').forEach(el => {
+        const raw = el.getAttribute('data-last-active');
+        const timeEl = el.querySelector('.chat-item-time');
+        if (timeEl && raw) {
+          timeEl.textContent = formatChatTime(raw);
+        }
+      });
+    }, 30000);
 
     let currentMessages = [];
     let pendingMediaBase64 = null;
@@ -2412,35 +2674,64 @@
       }
 
       const isGroup = jid.endsWith('@g.us');
+      const isBroadcast = jid === 'status@broadcast' || jid.endsWith('@newsletter') || jid.endsWith('@broadcast');
       const existing = isGroup
-        ? chatsCache.groups.find(g => g.id === jid)
-        : chatsCache.directChats.find(d => d.id === jid);
+        ? (chatsCache.groups || []).find(g => g.id === jid)
+        : isBroadcast
+        ? (chatsCache.broadcasts || []).find(b => b.id === jid)
+        : (chatsCache.directChats || []).find(d => d.id === jid);
 
       if (!existing) {
         const item = {
           id: jid,
           name: raw,
           isGroup,
-          phoneNumber: isGroup ? undefined : raw.replace(/\D/g, ''),
+          isBroadcast,
+          phoneNumber: isGroup || isBroadcast ? undefined : raw.replace(/\D/g, ''),
+          lastActive: new Date().toISOString(),
         };
         if (isGroup) {
           chatsCache.groups.unshift(item);
+        } else if (isBroadcast) {
+          chatsCache.broadcasts.unshift(item);
         } else {
           chatsCache.directChats.unshift(item);
         }
+        updateChipCounts();
         renderChatList();
       }
 
-      selectChat(jid, isGroup);
+      selectChat(jid, isGroup, isBroadcast);
     }
 
-    function selectChat(jid, isGroup) {
-      const list = isGroup ? chatsCache.groups : chatsCache.directChats;
-      selectedChat = list.find(c => c.id === jid) || { id: jid, name: jid, isGroup };
+    function selectChat(jid, isGroup, isBroadcast) {
+      let item = null;
+      if (isGroup) {
+        item = (chatsCache.groups || []).find(c => c.id === jid);
+      } else if (isBroadcast || jid === 'status@broadcast' || jid?.endsWith('@newsletter') || jid?.endsWith('@broadcast')) {
+        item = (chatsCache.broadcasts || []).find(c => c.id === jid);
+        isBroadcast = true;
+      } else {
+        item = (chatsCache.directChats || []).find(c => c.id === jid);
+      }
 
-      document.getElementById('current-chat-title').textContent = selectedChat.name;
+      selectedChat = item || {
+        id: jid,
+        name: jid,
+        isGroup: Boolean(isGroup),
+        isBroadcast: Boolean(isBroadcast),
+      };
+
+      const title = selectedChat.savedName || selectedChat.name || selectedChat.id;
+      document.getElementById('current-chat-title').textContent = title;
       document.getElementById('current-chat-jid').textContent = selectedChat.id;
-      document.getElementById('current-chat-avatar').textContent = isGroup ? '👥' : '👤';
+
+      let avatar = '👤';
+      if (selectedChat.isGroup) avatar = '👥';
+      else if (selectedChat.isBroadcast || selectedChat.id === 'status@broadcast' || selectedChat.id?.endsWith('@newsletter')) {
+        avatar = selectedChat.id === 'status@broadcast' ? '🟣' : '📢';
+      }
+      document.getElementById('current-chat-avatar').textContent = avatar;
 
       const btnGroupInfo = document.getElementById('btn-group-info');
       if (btnGroupInfo) {
@@ -4961,13 +5252,17 @@
 
     function populateDestinationDropdowns() {
       const select = document.getElementById('cmd-target-jid');
+      if (!select) return;
       select.innerHTML = '<option value="">-- Run Privately (Dashboard Terminal Only) --</option>';
 
-      for (const g of chatsCache.groups) {
+      for (const g of (chatsCache.groups || [])) {
         select.innerHTML += `<option value="${g.id}">Group: ${escapeHtml(g.name)}</option>`;
       }
-      for (const d of chatsCache.directChats) {
-        select.innerHTML += `<option value="${d.id}">DM: ${escapeHtml(d.name)}</option>`;
+      for (const d of (chatsCache.directChats || [])) {
+        select.innerHTML += `<option value="${d.id}">DM: ${escapeHtml(d.savedName || d.name)}</option>`;
+      }
+      for (const b of (chatsCache.broadcasts || [])) {
+        select.innerHTML += `<option value="${b.id}">Channel: ${escapeHtml(b.name)}</option>`;
       }
     }
 
@@ -5175,9 +5470,10 @@
       socket.on('chat:message', (msg) => {
         // Auto-bump conversation to top in sidebar with latest timestamp and snippet
         const snippet = msg.text || (msg.media ? `[${msg.media.kind}]` : '') || (msg.poll ? `[Poll: ${msg.poll.name}]` : '') || '';
-        const targetGroup = chatsCache.groups.find((g) => g.id === msg.chatJid);
-        const targetDirect = chatsCache.directChats.find((d) => d.id === msg.chatJid);
-        const targetChat = targetGroup || targetDirect;
+        const targetGroup = (chatsCache.groups || []).find((g) => g.id === msg.chatJid);
+        const targetDirect = (chatsCache.directChats || []).find((d) => d.id === msg.chatJid);
+        const targetBroadcast = (chatsCache.broadcasts || []).find((b) => b.id === msg.chatJid);
+        const targetChat = targetGroup || targetDirect || targetBroadcast;
 
         if (targetChat) {
           targetChat.lastActive = msg.timestamp || new Date().toISOString();

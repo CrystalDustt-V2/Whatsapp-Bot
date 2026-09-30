@@ -32,7 +32,7 @@ import { initApiServer } from './core/api-server';
 import { ConnectionManager } from './core/connection-manager';
 import logger from './core/logger';
 import { MessageHandler } from './core/message-handler';
-import { syncContacts } from './services/message-memory';
+import { syncContacts, triggerFullContactSync } from './services/message-memory';
 
 async function main() {
   logger.info('Starting WhatsApp Hybrid Bot...');
@@ -84,6 +84,16 @@ async function main() {
       logger.info('');
 
       apiServer.setBotSocket(socket);
+
+      // Trigger automatic comprehensive contact sync from primary phone in the background
+      triggerFullContactSync(socket)
+        .then((res) => {
+          logger.info({ count: res.count }, 'Startup primary phone contact sync finished');
+          apiServer.handleContactsSync([]);
+        })
+        .catch((err) => {
+          logger.debug({ err }, 'Background contact sync encountered error');
+        });
 
       const messageHandler = new MessageHandler(socket);
 
@@ -153,14 +163,59 @@ async function main() {
         }
       });
 
-      socket.ev.on('messaging-history.set', ({ contacts }) => {
+      socket.ev.on('messaging-history.set', ({ contacts, chats }) => {
         try {
           if (contacts && contacts.length) {
             syncContacts(contacts);
-            apiServer.handleContactsSync(contacts);
           }
+          if (chats && chats.length) {
+            const direct = chats
+              .filter((ch) => ch.id && !ch.id.endsWith('@g.us') && !ch.id.endsWith('@newsletter') && (ch as any).name)
+              .map((ch) => ({ id: ch.id, name: (ch as any).name }));
+            if (direct.length) syncContacts(direct);
+          }
+          apiServer.handleContactsSync(contacts || []);
         } catch (cErr) {
           logger.debug({ cErr }, 'Failed to sync messaging-history contacts');
+        }
+      });
+
+      socket.ev.on('chats.upsert', (newChats) => {
+        try {
+          const direct = newChats
+            .filter((ch) => ch.id && !ch.id.endsWith('@g.us') && !ch.id.endsWith('@newsletter') && (ch as any).name)
+            .map((ch) => ({ id: ch.id, name: (ch as any).name }));
+          if (direct.length) {
+            syncContacts(direct);
+            apiServer.handleContactsSync(direct);
+          }
+        } catch (chErr) {
+          logger.debug({ chErr }, 'Failed to sync direct chats upsert names');
+        }
+      });
+
+      socket.ev.on('chats.update', (updates) => {
+        try {
+          const direct = updates
+            .filter((ch) => ch.id && !ch.id.endsWith('@g.us') && !ch.id.endsWith('@newsletter') && (ch as any).name)
+            .map((ch) => ({ id: ch.id, name: (ch as any).name }));
+          if (direct.length) {
+            syncContacts(direct);
+            apiServer.handleContactsSync(direct);
+          }
+        } catch (chErr) {
+          logger.debug({ chErr }, 'Failed to sync direct chats update names');
+        }
+      });
+
+      socket.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+        try {
+          if (lid && jid) {
+            syncContacts([{ id: jid, lid, jid }]);
+            apiServer.handleContactsSync([]);
+          }
+        } catch (pnErr) {
+          logger.debug({ pnErr }, 'Failed to sync phoneNumberShare mapping');
         }
       });
 

@@ -83,7 +83,7 @@ const ConfigSchema = z.object({
   MEGA_2FA_CODE: z.string().optional(),
   AI_ENABLE_TOOLS: z.string().transform((value) => value !== 'false').default('true'),
   AI_DEBUG: z.string().transform((value) => value === 'true').default('false'),
-  IGNORE_NEWSLETTER_MESSAGES: z.string().transform((value) => value !== 'false').default('true'),
+  IGNORE_NEWSLETTER_MESSAGES: z.string().transform((value) => value === 'true').default('false'),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('openrouter/free'),
   OPENROUTER_IMAGE_MODEL: z.string().optional(),

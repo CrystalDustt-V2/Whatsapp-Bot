@@ -22,7 +22,7 @@ import {
   unwrapMessageInfo,
   type DeletedMessageRecord,
 } from '../services/deleted-message-recovery';
-import { getSenderIdentity } from '../services/message-memory';
+import { getSenderIdentity, triggerFullContactSync } from '../services/message-memory';
 import { sendRecoveredMedia, formatRecord } from '../commands/utility/deleted';
 
 interface ApiServerOptions {
@@ -126,7 +126,49 @@ export class ApiServer {
     this.setupMiddleware();
     this.setupRoutes();
     this.setupSocketIO();
+    this.initializeLastActiveMap();
     this.scheduledTimer = setInterval(() => this.processScheduledMessages(), 5000);
+  }
+
+  private initializeLastActiveMap(): void {
+    const aiMemoryPath = path.join(config.SESSION_PATH, 'ai-memory.jsonl');
+    if (fs.existsSync(aiMemoryPath)) {
+      try {
+        const lines = fs.readFileSync(aiMemoryPath, 'utf8').split(/\r?\n/).filter(Boolean);
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.chatJid && entry.ts) {
+              const existing = this.chatLastActiveMap.get(entry.chatJid);
+              if (!existing || new Date(entry.ts).getTime() > new Date(existing.timestamp).getTime()) {
+                this.chatLastActiveMap.set(entry.chatJid, {
+                  timestamp: entry.ts,
+                  lastText: entry.text || '',
+                });
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    try {
+      const state = loadState();
+      const all = [...(state.messages || []), ...(state.deleted || []), ...(state.viewOnce || [])];
+      for (const m of all) {
+        if (m.chatJid && m.timestamp) {
+          const existing = this.chatLastActiveMap.get(m.chatJid);
+          if (!existing || new Date(m.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
+            this.chatLastActiveMap.set(m.chatJid, {
+              timestamp: m.timestamp,
+              lastText: m.text || '',
+            });
+          }
+        }
+      }
+    } catch {}
+
+    logger.info({ trackedChats: this.chatLastActiveMap.size }, 'Preloaded last active timestamps for chats');
   }
 
   // ---------------------------------------------------------------------------
@@ -134,7 +176,7 @@ export class ApiServer {
   // ---------------------------------------------------------------------------
   handleIncomingMessage(msg: WAMessage): void {
     const chatJid = msg.key.remoteJid;
-    if (!chatJid || !botSocket || chatJid === 'status@broadcast') return;
+    if (!chatJid || !botSocket) return;
 
     if (msg.key.id) {
       this.rawMessageMap.set(msg.key.id, msg);
@@ -207,7 +249,7 @@ export class ApiServer {
 
   private parseWAMessage(msg: WAMessage, socket: WASocket): DashboardChatMessage | null {
     const chatJid = msg.key.remoteJid;
-    if (!chatJid || chatJid === 'status@broadcast') return null;
+    if (!chatJid) return null;
 
     const sender = getSenderIdentity(msg, socket);
     const unwrapped = unwrapMessageInfo(msg.message);
@@ -741,8 +783,53 @@ export class ApiServer {
           });
         }
 
+        const broadcastsMap = new Map<string, any>();
+        const broadcastJids = new Set<string>();
+        for (const k of this.chatLastActiveMap.keys()) {
+          if (k.endsWith('@newsletter') || k.endsWith('@broadcast') || k === 'status@broadcast') {
+            broadcastJids.add(k);
+          }
+        }
+        for (const k of this.liveMessageStore.keys()) {
+          if (k.endsWith('@newsletter') || k.endsWith('@broadcast') || k === 'status@broadcast') {
+            broadcastJids.add(k);
+          }
+        }
+        // Always include WhatsApp Status Broadcast so it is readily discoverable
+        broadcastJids.add('status@broadcast');
+
+        for (const bJid of broadcastJids) {
+          const live = this.liveMessageStore.get(bJid) || [];
+          const lastLive = live[live.length - 1];
+          const cachedActive = this.chatLastActiveMap.get(bJid);
+          const lastActive = cachedActive?.timestamp || lastLive?.timestamp || '';
+          const lastMessage =
+            cachedActive?.lastText ||
+            lastLive?.text ||
+            (lastLive?.media ? `[${lastLive.media.kind}]` : '') ||
+            '';
+
+          const isStatus = bJid === 'status@broadcast';
+          const name = isStatus
+            ? 'WhatsApp Status Broadcast'
+            : (bJid.split('@')[0] || 'Channel Broadcast');
+
+          broadcastsMap.set(bJid, {
+            id: bJid,
+            name,
+            isGroup: false,
+            isBroadcast: true,
+            isChannel: bJid.endsWith('@newsletter'),
+            lastActive,
+            lastMessage,
+          });
+        }
+
         groups.sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
         const directChats = Array.from(directChatsMap.values()).sort((a, b) =>
+          new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime()
+        );
+        const broadcasts = Array.from(broadcastsMap.values()).sort((a, b) =>
           new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime()
         );
 
@@ -750,8 +837,10 @@ export class ApiServer {
           success: true,
           groups,
           directChats,
+          broadcasts,
           totalGroups: groups.length,
           totalDirect: directChats.length,
+          totalBroadcasts: broadcasts.length,
         });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Failed to fetch chats' });
@@ -768,6 +857,27 @@ export class ApiServer {
         } catch {}
       }
       res.json({ success: true, contacts: [] });
+    });
+
+    this.app.post('/api/contacts/sync', this.requireDashboardAuth.bind(this), async (req, res) => {
+      if (!botSocket) {
+        res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
+        return;
+      }
+      try {
+        const result = await triggerFullContactSync(botSocket);
+        const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
+        let contacts: any[] = [];
+        if (fs.existsSync(contactsPath)) {
+          try {
+            contacts = Object.values(JSON.parse(fs.readFileSync(contactsPath, 'utf8')));
+          } catch {}
+        }
+        this.io.to('auth').emit('contacts:updated', { count: contacts.length });
+        res.json({ success: true, count: contacts.length, error: result.error });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Contact sync failed' });
+      }
     });
 
     // -------------------------------------------------------------------------
