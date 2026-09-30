@@ -106,6 +106,9 @@ export class ApiServer {
   private scheduledMessages: ScheduledMessage[] = [];
   private scheduledTimer: NodeJS.Timeout | null = null;
 
+  // Group metadata cache for resilience against WhatsApp IQ rate-limits and timeouts
+  private groupMetadataCache = new Map<string, { data: any; cachedAt: number }>();
+
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
     this.app = express();
@@ -561,6 +564,7 @@ export class ApiServer {
           const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
 
           for (const [id, meta] of Object.entries(groupsMap)) {
+            this.groupMetadataCache.set(id, { data: meta, cachedAt: Date.now() });
             const me = meta.participants?.find((p) => {
               const pNum = p.id?.replace(/\D/g, '');
               return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
@@ -727,10 +731,10 @@ export class ApiServer {
 
       try {
         if (jid.endsWith('@g.us')) {
-          const meta = await botSocket.groupMetadata(jid);
+          const meta = await this.fetchGroupMetadata(jid);
           const myPn = botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '');
           const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
-          const me = meta.participants?.find((p) => {
+          const me = meta.participants?.find((p: any) => {
             const pNum = p.id?.replace(/\D/g, '');
             return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
           });
@@ -746,7 +750,7 @@ export class ApiServer {
               isRestrict: Boolean(meta.restrict),
               isBotAdmin: Boolean(me?.admin),
               participantsCount: meta.participants?.length || 0,
-              participants: meta.participants?.map((p) => ({
+              participants: meta.participants?.map((p: any) => ({
                 id: p.id,
                 phoneNumber: p.id?.replace(/\D/g, '') || '',
                 role: p.admin || 'member',
@@ -805,28 +809,30 @@ export class ApiServer {
         let bypassed = false;
 
         let mentions: string[] | undefined = undefined;
-        if (isGroup && (req.body?.mentionAll || /\b@(everyone|all)\b/i.test(text))) {
+        let meta: any = null;
+        if (isGroup) {
           try {
-            const meta = await botSocket.groupMetadata(jid);
-            mentions = meta.participants?.map((p) => p.id);
+            meta = await this.fetchGroupMetadata(jid);
           } catch (mErr) {
-            logger.debug({ mErr, jid }, 'Failed to fetch participants for mentionAll');
+            logger.debug({ mErr, jid }, 'Failed to fetch group metadata in send route');
           }
         }
 
-        if (isGroup) {
-          try {
-            const meta = await botSocket.groupMetadata(jid);
-            const isAnnounce = Boolean(meta.announce);
-            const myPn = botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '');
-            const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
-            const me = meta.participants?.find((p) => {
-              const pNum = p.id?.replace(/\D/g, '');
-              return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
-            });
-            const isBotAdmin = Boolean(me?.admin);
+        if (isGroup && meta && (req.body?.mentionAll || /\b@(everyone|all)\b/i.test(text))) {
+          mentions = meta.participants?.map((p: any) => p.id);
+        }
 
-            if (isAnnounce && !isBotAdmin) {
+        if (isGroup && meta) {
+          const isAnnounce = Boolean(meta.announce);
+          const myPn = botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '');
+          const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
+          const me = meta.participants?.find((p: any) => {
+            const pNum = p.id?.replace(/\D/g, '');
+            return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
+          });
+          const isBotAdmin = Boolean(me?.admin);
+
+          if (isAnnounce && !isBotAdmin) {
               if (shouldQueue) {
                 const list = this.queuedGroupMessages.get(jid) || [];
                 list.push({ text: text.trim(), queuedAt: new Date().toISOString() });
@@ -897,10 +903,7 @@ export class ApiServer {
                 return;
               }
             }
-          } catch (metaErr) {
-            logger.debug({ metaErr, jid }, 'Metadata check skipped before send');
           }
-        }
 
         const sent = await botSocket.sendMessage(
           jid,
@@ -1332,44 +1335,53 @@ export class ApiServer {
 
       try {
         if (jid.endsWith('@g.us')) {
-          const meta = await botSocket.groupMetadata(jid);
+          const meta = await this.fetchGroupMetadata(jid);
           const myPn = botSocket.user?.id?.split(':')[0]?.replace(/\D/g, '');
           const myLid = botSocket.user?.lid?.split(':')[0]?.replace(/\D/g, '');
-          const me = meta.participants?.find((p) => {
+          const me = meta.participants?.find((p: any) => {
             const pNum = p.id?.replace(/\D/g, '');
             return (myPn && pNum?.includes(myPn)) || (myLid && pNum?.includes(myLid));
           });
           const isBotAdmin = Boolean(me?.admin);
 
-          let inviteCode: string | null = null;
-          if (isBotAdmin) {
+          let inviteCode: string | null = meta.inviteCode || null;
+          if (!inviteCode && isBotAdmin) {
             try {
               inviteCode = (await botSocket.groupInviteCode(jid)) || null;
             } catch {}
           }
 
-          res.json({
-            success: true,
-            isGroup: true,
+          const participants = (meta.participants || []).map((p: any) => ({
+            id: p.id,
+            phoneNumber: p.id.split('@')[0].replace(/\D/g, ''),
+            admin: p.admin || null,
+            isSuperAdmin: p.admin === 'superadmin',
+            isAdmin: Boolean(p.admin),
+          }));
+
+          const metadataPayload = {
             id: meta.id,
-            subject: meta.subject,
-            owner: meta.owner,
-            creation: meta.creation,
+            subject: meta.subject || 'Untitled Group',
+            owner: meta.owner || '',
+            creation: meta.creation || 0,
             desc: meta.desc?.toString() || '',
-            participantsCount: meta.participants?.length || 0,
+            participantsCount: participants.length,
+            announce: Boolean(meta.announce),
+            restrict: Boolean(meta.restrict),
             isAnnounce: Boolean(meta.announce),
             isRestrict: Boolean(meta.restrict),
             isBotAdmin,
             botAdminRole: me?.admin || null,
             inviteCode,
             inviteLink: inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null,
-            participants: (meta.participants || []).map((p) => ({
-              id: p.id,
-              phoneNumber: p.id.split('@')[0].replace(/\D/g, ''),
-              admin: p.admin || null,
-              isSuperAdmin: p.admin === 'superadmin',
-              isAdmin: Boolean(p.admin),
-            })),
+            participants,
+          };
+
+          res.json({
+            success: true,
+            isGroup: true,
+            metadata: metadataPayload,
+            ...metadataPayload,
           });
         } else {
           res.json({
@@ -1377,9 +1389,16 @@ export class ApiServer {
             isGroup: false,
             id: jid,
             phoneNumber: jid.split('@')[0].replace(/\D/g, ''),
+            metadata: {
+              id: jid,
+              subject: jid.split('@')[0],
+              participantsCount: 1,
+              participants: [],
+            },
           });
         }
       } catch (err: any) {
+        logger.error({ err, jid }, 'Failed to fetch group metadata');
         res.status(500).json({ success: false, error: err?.message || 'Failed to fetch metadata.' });
       }
     });
@@ -1409,6 +1428,7 @@ export class ApiServer {
           p.includes('@') ? p : `${p.replace(/\D/g, '')}@s.whatsapp.net`
         );
         const result = await botSocket.groupParticipantsUpdate(jid, formatted, action);
+        this.groupMetadataCache.delete(jid);
         res.json({ success: true, action, result });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Participant update failed.' });
@@ -1437,6 +1457,7 @@ export class ApiServer {
 
       try {
         await botSocket.groupSettingUpdate(jid, setting);
+        this.groupMetadataCache.delete(jid);
         res.json({ success: true, setting });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Group setting update failed.' });
@@ -1466,6 +1487,7 @@ export class ApiServer {
         if (description !== undefined) {
           await botSocket.groupUpdateDescription(jid, description);
         }
+        this.groupMetadataCache.delete(jid);
         res.json({ success: true, subject, description });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Failed to update subject or description.' });
@@ -1492,6 +1514,7 @@ export class ApiServer {
         let code: string | null | undefined = null;
         if (action === 'revoke') {
           code = await botSocket.groupRevokeInvite(jid);
+          this.groupMetadataCache.delete(jid);
         } else {
           code = await botSocket.groupInviteCode(jid);
         }
@@ -1522,6 +1545,7 @@ export class ApiServer {
 
       try {
         await botSocket.groupLeave(jid);
+        this.groupMetadataCache.delete(jid);
         res.json({ success: true, message: 'Left group successfully.' });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'Failed to leave group.' });
@@ -1693,18 +1717,18 @@ export class ApiServer {
 
         if (isGroup) {
           try {
-            const metadata = await botSocket.groupMetadata(jid);
-            participantsCount = metadata.participants.length;
+            const metadata = await this.fetchGroupMetadata(jid);
+            participantsCount = metadata.participants?.length || 0;
             const activeJids = new Set(Array.from(senderCounts.keys()).map((k) => k.split('@')[0]));
 
-            lurkers = metadata.participants
-              .filter((p) => !activeJids.has(p.id.split('@')[0]))
-              .map((p) => ({
+            lurkers = (metadata.participants || [])
+              .filter((p: any) => !activeJids.has(p.id.split('@')[0]))
+              .map((p: any) => ({
                 id: p.id,
-                phoneNumber: p.id.split('@')[0],
+                phoneNumber: p.id.split('@')[0].replace(/\D/g, ''),
               }));
           } catch (mErr) {
-            logger.debug({ mErr }, 'Could not fetch metadata for lurker analysis');
+            logger.warn({ mErr, jid }, 'Could not fetch metadata for lurker analysis');
           }
         }
 
@@ -2216,8 +2240,8 @@ export class ApiServer {
         let mentions: string[] | undefined = undefined;
         if (item.chatJid.endsWith('@g.us') && (item.mentionAll || /\b@(everyone|all)\b/i.test(item.text))) {
           try {
-            const meta = await botSocket.groupMetadata(item.chatJid);
-            mentions = meta.participants?.map((p) => p.id);
+            const meta = await this.fetchGroupMetadata(item.chatJid);
+            mentions = meta.participants?.map((p: any) => p.id);
           } catch {}
         }
 
@@ -2235,6 +2259,56 @@ export class ApiServer {
     }
 
     this.io.to('auth').emit('chat:scheduled-update', this.scheduledMessages);
+  }
+
+  async fetchGroupMetadata(jid: string, forceFresh: boolean = false): Promise<any> {
+    if (!botSocket) {
+      throw new Error('Bot is not connected to WhatsApp.');
+    }
+
+    const now = Date.now();
+    const cached = this.groupMetadataCache.get(jid);
+    if (!forceFresh && cached && now - cached.cachedAt < 60_000 && Array.isArray(cached.data?.participants)) {
+      return cached.data;
+    }
+
+    // 1. Try direct groupMetadata(jid) query
+    try {
+      const meta = await botSocket.groupMetadata(jid);
+      if (meta && Array.isArray(meta.participants)) {
+        this.groupMetadataCache.set(jid, { data: meta, cachedAt: now });
+        return meta;
+      }
+    } catch (err: any) {
+      logger.warn({ err: err?.message || err, jid }, 'Direct groupMetadata query failed, attempting fallbacks');
+    }
+
+    // 2. Check if previous cache entry has participants
+    if (cached && Array.isArray(cached.data?.participants) && cached.data.participants.length > 0) {
+      logger.info({ jid }, 'Serving group metadata from previous cache entry');
+      return cached.data;
+    }
+
+    // 3. Fallback: query all participating groups
+    try {
+      const allGroups = await botSocket.groupFetchAllParticipating();
+      for (const [gId, gMeta] of Object.entries(allGroups)) {
+        this.groupMetadataCache.set(gId, { data: gMeta, cachedAt: now });
+      }
+      const found = this.groupMetadataCache.get(jid)?.data || allGroups[jid];
+      if (found && Array.isArray(found.participants)) {
+        return found;
+      }
+    } catch (allErr: any) {
+      logger.warn({ allErr: allErr?.message || allErr }, 'groupFetchAllParticipating fallback failed');
+    }
+
+    // 4. Return any cached entry if exists
+    if (this.groupMetadataCache.has(jid)) {
+      return this.groupMetadataCache.get(jid)!.data;
+    }
+
+    throw new Error('Could not retrieve group metadata from WhatsApp. The bot may have been removed or query timed out.');
   }
 
   start() {

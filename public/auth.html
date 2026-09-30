@@ -1769,8 +1769,12 @@
             <div class="stat-metric-label">Recorded Messages</div>
           </div>
           <div class="stat-metric-card">
+            <div class="stat-metric-val" id="ga-total-members" style="color:#38bdf8;">0</div>
+            <div class="stat-metric-label">Total Members</div>
+          </div>
+          <div class="stat-metric-card">
             <div class="stat-metric-val" id="ga-active-talkers">0</div>
-            <div class="stat-metric-label">Active Members</div>
+            <div class="stat-metric-label">Active Chatters</div>
           </div>
           <div class="stat-metric-card">
             <div class="stat-metric-val" id="ga-lurkers-count" style="color:#fb7185;">0</div>
@@ -2815,35 +2819,40 @@
       try {
         const res = await fetch(`/api/chats/${encodeURIComponent(selectedChat.id)}/metadata`);
         const data = await res.json();
-        if (!data.success || !data.metadata) {
+        const meta = data.metadata || (data.participants ? data : null);
+        if (!data.success || !meta) {
           document.getElementById('ginfo-participants-list').innerHTML = `
             <div style="padding:20px;text-align:center;color:#fb7185;font-size:12px;">${escapeHtml(data.error || 'Failed to load group metadata')}</div>
           `;
           return;
         }
 
-        groupMetadataCache = data.metadata;
-        document.getElementById('ginfo-subject').textContent = data.metadata.subject || selectedChat.name;
-        document.getElementById('ginfo-badge-members').textContent = `${data.metadata.participantsCount} Members`;
-        document.getElementById('ginfo-badge-role').textContent = data.metadata.isBotAdmin ? '👑 Bot is Admin' : '👤 Bot is Member';
-        document.getElementById('ginfo-badge-role').className = data.metadata.isBotAdmin ? 'tag-pill tag-bot-admin' : 'tag-pill tag-admin-only';
-        document.getElementById('ginfo-badge-announce').style.display = data.metadata.announce ? 'inline-block' : 'none';
+        groupMetadataCache = meta;
+        document.getElementById('ginfo-subject').textContent = meta.subject || selectedChat.name;
+        const count = meta.participantsCount || (Array.isArray(meta.participants) ? meta.participants.length : 0);
+        document.getElementById('ginfo-badge-members').textContent = `${count} Members`;
+        document.getElementById('ginfo-badge-role').textContent = meta.isBotAdmin ? '👑 Bot is Admin' : '👤 Bot is Member';
+        document.getElementById('ginfo-badge-role').className = meta.isBotAdmin ? 'tag-pill tag-bot-admin' : 'tag-pill tag-admin-only';
+        document.getElementById('ginfo-badge-announce').style.display = (meta.announce || meta.isAnnounce) ? 'inline-block' : 'none';
 
-        document.getElementById('ginfo-edit-subject').value = data.metadata.subject || '';
-        document.getElementById('ginfo-edit-desc').value = data.metadata.desc || '';
+        document.getElementById('ginfo-edit-subject').value = meta.subject || '';
+        document.getElementById('ginfo-edit-desc').value = meta.desc || '';
 
         const btnAnnounce = document.getElementById('btn-toggle-announce');
-        btnAnnounce.textContent = data.metadata.announce ? '🔓 Open Group (All Can Send)' : '🔒 Close Group (Admins Only)';
+        btnAnnounce.textContent = (meta.announce || meta.isAnnounce) ? '🔓 Open Group (All Can Send)' : '🔒 Close Group (Admins Only)';
 
         const btnLocked = document.getElementById('btn-toggle-locked');
-        btnLocked.textContent = data.metadata.restrict ? '🔓 Allow All to Edit Info' : '⚙️ Lock Info (Admins Only)';
+        btnLocked.textContent = (meta.restrict || meta.isRestrict) ? '🔓 Allow All to Edit Info' : '⚙️ Lock Info (Admins Only)';
 
         const inviteLinkEl = document.getElementById('ginfo-invite-link');
-        inviteLinkEl.textContent = data.metadata.inviteLink || (data.metadata.isBotAdmin ? 'No link generated' : 'Unavailable (Requires Bot Admin)');
+        inviteLinkEl.textContent = meta.inviteLink || (meta.isBotAdmin ? 'No link generated' : 'Unavailable (Requires Bot Admin)');
 
-        renderGroupParticipants(data.metadata.participants, data.metadata.isBotAdmin);
+        renderGroupParticipants(meta.participants || [], meta.isBotAdmin);
       } catch (err) {
         console.error('Failed to load group info:', err);
+        document.getElementById('ginfo-participants-list').innerHTML = `
+          <div style="padding:20px;text-align:center;color:#fb7185;font-size:12px;">Network error loading metadata: ${escapeHtml(err.message)}</div>
+        `;
       }
     }
 
@@ -3178,19 +3187,30 @@
       document.getElementById('ga-total-msgs').textContent = '...';
       document.getElementById('ga-active-talkers').textContent = '...';
       document.getElementById('ga-lurkers-count').textContent = '...';
+      if (document.getElementById('ga-total-members')) {
+        document.getElementById('ga-total-members').textContent = '...';
+      }
       document.getElementById('ga-top-senders-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">Computing group analytics...</div>`;
       document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">Detecting inactive members...</div>`;
 
       try {
         const res = await fetch(`/api/chats/${encodeURIComponent(selectedChat.id)}/analytics`);
         const data = await res.json();
-        if (!data.success || !data.analytics) return;
+        if (!data.success || !data.analytics) {
+          const err = data.error || 'Failed to compute group analytics';
+          document.getElementById('ga-top-senders-list').innerHTML = `<div style="text-align:center;padding:12px;color:#fb7185;font-size:12px;">${escapeHtml(err)}</div>`;
+          document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:#fb7185;font-size:12px;">${escapeHtml(err)}</div>`;
+          return;
+        }
 
         const a = data.analytics;
         groupAnalyticsCache = a;
         document.getElementById('ga-total-msgs').textContent = a.totalRecorded;
         document.getElementById('ga-active-talkers').textContent = a.topSenders.length;
         document.getElementById('ga-lurkers-count').textContent = a.lurkersCount;
+        if (document.getElementById('ga-total-members')) {
+          document.getElementById('ga-total-members').textContent = a.participantsCount;
+        }
 
         // Render top senders
         const medals = ['🥇', '🥈', '🥉'];
@@ -3225,11 +3245,15 @@
               <button class="btn btn-secondary" style="padding:2px 6px;font-size:10.5px;" onclick="tagLurker('${l.phoneNumber}')" title="Insert @mention into composer">@ Tag</button>
             </div>
           `).join('');
+        } else if (a.participantsCount === 0) {
+          document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:12px;">Syncing group roster from WhatsApp...</div>`;
         } else {
-          document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:#34d399;font-size:12px;">🎉 No inactive lurkers detected in this group!</div>`;
+          document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:#34d399;font-size:12px;">🎉 All ${a.participantsCount} group members have spoken in recorded chat history!</div>`;
         }
       } catch (err) {
         console.error('Failed to load group analytics:', err);
+        document.getElementById('ga-top-senders-list').innerHTML = `<div style="text-align:center;padding:12px;color:#fb7185;font-size:12px;">Network error: ${escapeHtml(err.message)}</div>`;
+        document.getElementById('ga-lurkers-list').innerHTML = `<div style="text-align:center;padding:12px;color:#fb7185;font-size:12px;">Network error: ${escapeHtml(err.message)}</div>`;
       }
     }
 
