@@ -1287,6 +1287,9 @@
                 <div style="font-size:42px;margin-bottom:8px;">✅</div>
                 <h3 style="color:#34d399;margin-bottom:4px;">Bot Connected & Active</h3>
                 <p style="color:var(--text-muted);font-size:13px;">WhatsApp authentication session is loaded and valid.</p>
+                <button class="btn btn-secondary" style="margin-top:12px;padding:5px 12px;font-size:12px;color:#f87171;border-color:rgba(239,68,68,0.3);display:inline-flex;align-items:center;gap:6px;" onclick="resetWhatsAppSession()">
+                  <span>🔄</span> Relink / Scan New QR
+                </button>
               </div>
             </div>
           </div>
@@ -2401,6 +2404,23 @@
       } finally {
         if (btn) btn.disabled = false;
         if (icon) icon.classList.remove('spin-animation');
+      }
+    }
+
+    async function resetWhatsAppSession() {
+      if (!confirm('Are you sure you want to reset the WhatsApp session and generate a new QR code?')) return;
+      showToast('Resetting WhatsApp session credentials...');
+      try {
+        const res = await fetch('/api/whatsapp/reset-session', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Session reset. Waiting for new QR code...');
+          fetchAuth();
+        } else {
+          showToast(data.error || 'Failed to reset session');
+        }
+      } catch (err) {
+        showToast('Network error while resetting session');
       }
     }
 

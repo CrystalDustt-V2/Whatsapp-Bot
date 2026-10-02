@@ -234,6 +234,8 @@ async function main() {
     },
   });
 
+  apiServer.setConnectionManager(connectionManager);
+
   await connectionManager.connect();
 }
 

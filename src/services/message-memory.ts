@@ -27,8 +27,16 @@ type AiMemoryEntry = {
 };
 
 const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
+const lidMappingPath = path.join(config.SESSION_PATH, 'lid-mapping.json');
 const aiMemoryPath = resolveDataPath(config.AI_MEMORY_FILE, path.join(config.SESSION_PATH, 'ai-memory.jsonl'));
 let contacts: Record<string, StoredContact> | null = null;
+
+type LidMappingStore = {
+  lidToPn: Record<string, string>;
+  pnToLid: Record<string, string>;
+};
+
+let lidMappingCache: LidMappingStore | null = null;
 
 function resolveDataPath(value: string | undefined, fallback: string): string {
   const filePath = value?.trim() || fallback;
@@ -37,6 +45,98 @@ function resolveDataPath(value: string | undefined, fallback: string): string {
 
 function ensureDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+export function readLidMapping(): LidMappingStore {
+  if (lidMappingCache) return lidMappingCache;
+  try {
+    if (fs.existsSync(lidMappingPath)) {
+      lidMappingCache = JSON.parse(fs.readFileSync(lidMappingPath, 'utf8')) as LidMappingStore;
+      if (!lidMappingCache.lidToPn) lidMappingCache.lidToPn = {};
+      if (!lidMappingCache.pnToLid) lidMappingCache.pnToLid = {};
+      return lidMappingCache;
+    }
+  } catch {}
+  lidMappingCache = { lidToPn: {}, pnToLid: {} };
+  return lidMappingCache;
+}
+
+function saveLidMapping(): void {
+  try {
+    ensureDir(lidMappingPath);
+    fs.writeFileSync(lidMappingPath, JSON.stringify(readLidMapping(), null, 2));
+  } catch (err) {
+    logger.warn({ err }, 'Could not save LID mapping cache');
+  }
+}
+
+export function registerLidMapping(lidRaw?: string, pnRaw?: string): void {
+  if (!lidRaw || !pnRaw) return;
+  const store = readLidMapping();
+  const cleanLid = lidRaw.split(':')[0].trim();
+  const cleanPn = pnRaw.split(':')[0].trim();
+
+  const lidKey = cleanLid.endsWith('@lid') ? cleanLid : `${cleanLid}@lid`;
+  const pnKey = cleanPn.endsWith('@s.whatsapp.net') ? cleanPn : `${cleanPn.replace(/\D/g, '')}@s.whatsapp.net`;
+
+  if (lidKey === pnKey) return;
+
+  let changed = false;
+  if (store.lidToPn[lidKey] !== pnKey) {
+    store.lidToPn[lidKey] = pnKey;
+    changed = true;
+  }
+  if (store.pnToLid[pnKey] !== lidKey) {
+    store.pnToLid[pnKey] = lidKey;
+    changed = true;
+  }
+
+  if (changed) {
+    saveLidMapping();
+
+    // Cross-propagate saved names between LID entry and Phone entry in contacts cache
+    const storedContacts = readContacts();
+    const lidEntry = storedContacts[lidKey];
+    const pnEntry = storedContacts[pnKey];
+
+    if (lidEntry?.savedName && (!pnEntry || !pnEntry.savedName)) {
+      storedContacts[pnKey] = {
+        jid: pnKey,
+        phoneNumber: jidNumber(pnKey),
+        savedName: lidEntry.savedName,
+        profileName: pnEntry?.profileName || lidEntry.profileName,
+        displayName: lidEntry.savedName,
+        updatedAt: new Date().toISOString(),
+      };
+      saveContacts();
+    } else if (pnEntry?.savedName && (!lidEntry || !lidEntry.savedName)) {
+      storedContacts[lidKey] = {
+        jid: lidKey,
+        phoneNumber: jidNumber(pnKey),
+        savedName: pnEntry.savedName,
+        profileName: lidEntry?.profileName || pnEntry.profileName,
+        displayName: pnEntry.savedName,
+        updatedAt: new Date().toISOString(),
+      };
+      saveContacts();
+    }
+  }
+}
+
+export function getPhoneFromLid(lid: string): string | undefined {
+  if (!lid) return undefined;
+  const store = readLidMapping();
+  const clean = lid.split(':')[0].trim();
+  const key = clean.endsWith('@lid') ? clean : `${clean}@lid`;
+  return store.lidToPn[key];
+}
+
+export function getLidFromPhone(pn: string): string | undefined {
+  if (!pn) return undefined;
+  const store = readLidMapping();
+  const clean = pn.split(':')[0].trim();
+  const key = clean.endsWith('@s.whatsapp.net') ? clean : `${clean.replace(/\D/g, '')}@s.whatsapp.net`;
+  return store.pnToLid[key];
 }
 
 export function readContacts(): Record<string, StoredContact> {
@@ -79,7 +179,7 @@ function senderJid(message: WAMessage, socket: WASocket): string {
   return message.key.fromMe ? userJid || remoteJid : remoteJid;
 }
 
-export function syncContacts(newContacts: Array<{ id?: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }>): void {
+export function syncContacts(newContacts: Array<{ id?: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string; fullName?: string; firstName?: string; displayName?: string }>): void {
   if (!Array.isArray(newContacts) || !newContacts.length) return;
   const stored = readContacts();
   let changed = false;
@@ -89,43 +189,85 @@ export function syncContacts(newContacts: Array<{ id?: string; name?: string; no
     let rawJid = c.jid || c.id || '';
     if (!rawJid || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter') || rawJid === 'status@broadcast') continue;
 
-    let jid = '';
-    if (rawJid.endsWith('@s.whatsapp.net')) {
-      jid = rawJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
-    } else if (rawJid.endsWith('@lid')) {
-      if (c.jid && c.jid.endsWith('@s.whatsapp.net')) {
-        jid = c.jid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
-      } else {
-        jid = rawJid;
-      }
-    } else if (/^\d+$/.test(rawJid)) {
-      jid = `${rawJid}@s.whatsapp.net`;
-    } else {
-      jid = rawJid;
+    const lidCandidate = c.lid || (rawJid.endsWith('@lid') ? rawJid : undefined);
+    const pnCandidate = (c.jid && c.jid.endsWith('@s.whatsapp.net')) ? c.jid : (rawJid.endsWith('@s.whatsapp.net') ? rawJid : undefined);
+    if (lidCandidate && pnCandidate) {
+      registerLidMapping(lidCandidate, pnCandidate);
     }
 
-    const phone = jidNumber(jid);
-    const savedName = cleanName(c.name);
-    const pushName = cleanName(c.notify);
-    const verified = cleanName(c.verifiedName);
-    const existing = stored[jid];
+    let primaryJid = '';
+    let phoneNumber = '';
 
-    const chosenName = savedName || existing?.savedName || verified || pushName || existing?.profileName || phone || jid;
+    if (rawJid.endsWith('@s.whatsapp.net')) {
+      primaryJid = rawJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+      phoneNumber = jidNumber(primaryJid);
+    } else if (rawJid.endsWith('@lid')) {
+      const cleanLid = rawJid.split('@')[0].split(':')[0] + '@lid';
+      const mappedPn = getPhoneFromLid(cleanLid);
+      if (mappedPn) {
+        primaryJid = mappedPn;
+        phoneNumber = jidNumber(mappedPn);
+      } else if (c.jid && c.jid.endsWith('@s.whatsapp.net')) {
+        primaryJid = c.jid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+        phoneNumber = jidNumber(primaryJid);
+        registerLidMapping(cleanLid, primaryJid);
+      } else {
+        primaryJid = cleanLid;
+        phoneNumber = '';
+      }
+    } else if (/^\d+$/.test(rawJid)) {
+      primaryJid = `${rawJid}@s.whatsapp.net`;
+      phoneNumber = rawJid;
+    } else {
+      primaryJid = rawJid;
+    }
+
+    const savedName = cleanName(c.fullName || c.firstName || c.name || c.displayName || (c as any).shortName);
+    const pushName = cleanName(c.notify || (c as any).profileName);
+    const verified = cleanName(c.verifiedName);
+
+    let existing = stored[primaryJid];
+    if (!existing && primaryJid.endsWith('@s.whatsapp.net')) {
+      const mappedLid = getLidFromPhone(primaryJid);
+      if (mappedLid && stored[mappedLid]) existing = stored[mappedLid];
+    } else if (!existing && primaryJid.endsWith('@lid')) {
+      const mappedPn = getPhoneFromLid(primaryJid);
+      if (mappedPn && stored[mappedPn]) existing = stored[mappedPn];
+    }
+
+    const currentSavedName = savedName || existing?.savedName;
+    const currentProfileName = pushName || existing?.profileName;
+    const chosenName = currentSavedName || verified || currentProfileName || phoneNumber || primaryJid;
+
+    const contactObj: StoredContact = {
+      jid: primaryJid,
+      phoneNumber: phoneNumber || existing?.phoneNumber || (primaryJid.endsWith('@s.whatsapp.net') ? jidNumber(primaryJid) : ''),
+      savedName: currentSavedName,
+      profileName: currentProfileName,
+      displayName: chosenName,
+      updatedAt: new Date().toISOString(),
+    };
 
     if (
       !existing ||
-      (savedName && existing.savedName !== savedName) ||
-      (pushName && existing.profileName !== pushName) ||
-      existing.displayName !== chosenName
+      (currentSavedName && existing.savedName !== currentSavedName) ||
+      (currentProfileName && existing.profileName !== currentProfileName) ||
+      existing.displayName !== chosenName ||
+      (!existing.phoneNumber && phoneNumber)
     ) {
-      stored[jid] = {
-        jid,
-        phoneNumber: phone,
-        savedName: savedName || existing?.savedName,
-        profileName: pushName || existing?.profileName,
-        displayName: chosenName,
-        updatedAt: new Date().toISOString(),
-      };
+      stored[primaryJid] = contactObj;
+
+      if (primaryJid.endsWith('@s.whatsapp.net')) {
+        const mappedLid = lidCandidate || getLidFromPhone(primaryJid);
+        if (mappedLid) {
+          stored[mappedLid] = { ...contactObj, jid: mappedLid };
+        }
+      } else if (primaryJid.endsWith('@lid')) {
+        const mappedPn = getPhoneFromLid(primaryJid);
+        if (mappedPn) {
+          stored[mappedPn] = { ...contactObj, jid: mappedPn, phoneNumber: jidNumber(mappedPn) };
+        }
+      }
       changed = true;
     }
   }
@@ -140,16 +282,27 @@ export async function triggerFullContactSync(socket: WASocket): Promise<{ succes
   try {
     const collections: string[] = ['critical_unblock_low', 'regular_low', 'regular_high', 'regular', 'critical_block'];
 
-    // Reset versions to 0 in auth state files so Baileys requests full snapshot from WhatsApp servers
+    // 1. Unlink version files from session folder to discard old hashes
     for (const name of collections) {
       const vFile = path.join(config.SESSION_PATH, `app-state-sync-version-${name}.json`);
       if (fs.existsSync(vFile)) {
         try {
-          const content = JSON.parse(fs.readFileSync(vFile, 'utf8'));
-          content.version = 0;
-          fs.writeFileSync(vFile, JSON.stringify(content));
+          fs.unlinkSync(vFile);
         } catch {}
       }
+    }
+
+    // 2. Unset in Baileys auth keys so it initializes clean newLTHashState and sends return_snapshot = true
+    try {
+      if ((socket as any).authState?.keys?.set) {
+        const nullEntries: Record<string, null> = {};
+        for (const name of collections) {
+          nullEntries[name] = null;
+        }
+        await (socket as any).authState.keys.set({ 'app-state-sync-version': nullEntries });
+      }
+    } catch (authKeyErr) {
+      logger.debug({ authKeyErr }, 'Could not reset authState app-state-sync-version keys');
     }
 
     logger.info('Requesting full app-state contact snapshot from primary phone...');
@@ -157,7 +310,8 @@ export async function triggerFullContactSync(socket: WASocket): Promise<{ succes
       await (socket as any).resyncAppState(['critical_unblock_low', 'regular_low', 'regular_high', 'regular'], true);
     }
 
-    // Also resync any contacts from all participating groups
+    // 3. Harvest contacts from all participating groups and discover LIDs
+    const phoneNumbersToQuery: string[] = [];
     try {
       const groupsMap = await socket.groupFetchAllParticipating();
       const groupContacts: any[] = [];
@@ -165,6 +319,9 @@ export async function triggerFullContactSync(socket: WASocket): Promise<{ succes
         for (const p of meta.participants || []) {
           if (p.id && !p.id.endsWith('@g.us')) {
             groupContacts.push({ id: p.id });
+            if (p.id.endsWith('@s.whatsapp.net')) {
+              phoneNumbersToQuery.push(p.id);
+            }
           }
         }
       }
@@ -172,6 +329,40 @@ export async function triggerFullContactSync(socket: WASocket): Promise<{ succes
         syncContacts(groupContacts);
       }
     } catch {}
+
+    // 4. Proactively query onWhatsApp to map phone numbers to LIDs
+    if (typeof socket.onWhatsApp === 'function' && phoneNumbersToQuery.length) {
+      const unique = Array.from(new Set(phoneNumbersToQuery)).slice(0, 50);
+      try {
+        const onWaResults = await socket.onWhatsApp(...unique);
+        for (const res of onWaResults || []) {
+          if (res.exists && res.jid && (res as any).lid) {
+            registerLidMapping((res as any).lid, res.jid);
+          }
+        }
+      } catch {}
+    }
+
+    // 5. Harvest historical numbers from processed messages if any
+    const procPath = path.join(config.SESSION_PATH, 'processed-messages.json');
+    if (fs.existsSync(procPath)) {
+      try {
+        const procData = JSON.parse(fs.readFileSync(procPath, 'utf8'));
+        const harvested: Array<{ id: string }> = [];
+        const procKeys = Array.isArray(procData) ? procData : Object.values(procData);
+        for (const val of procKeys) {
+          if (typeof val === 'string' && val.includes('@s.whatsapp.net')) {
+            const raw = val.split(':')[0];
+            if (raw.endsWith('@s.whatsapp.net')) {
+              harvested.push({ id: raw });
+            }
+          }
+        }
+        if (harvested.length) {
+          syncContacts(harvested);
+        }
+      } catch {}
+    }
 
     const count = Object.keys(readContacts()).length;
     logger.info({ count }, 'Full contact synchronization completed');
@@ -184,7 +375,26 @@ export async function triggerFullContactSync(socket: WASocket): Promise<{ succes
 
 export function getSenderIdentity(message: WAMessage, socket: WASocket): SenderIdentity {
   const jid = senderJid(message, socket);
-  const stored = readContacts()[jid];
+  const storedContacts = readContacts();
+
+  // Proactively register LID mapping if remote and participant have different formats
+  if (message.key.remoteJid && message.key.participant) {
+    if (message.key.remoteJid.endsWith('@s.whatsapp.net') && message.key.participant.endsWith('@lid')) {
+      registerLidMapping(message.key.participant, message.key.remoteJid);
+    } else if (message.key.remoteJid.endsWith('@lid') && message.key.participant.endsWith('@s.whatsapp.net')) {
+      registerLidMapping(message.key.remoteJid, message.key.participant);
+    }
+  }
+
+  let stored = storedContacts[jid];
+  if (!stored && jid.endsWith('@s.whatsapp.net')) {
+    const mappedLid = getLidFromPhone(jid);
+    if (mappedLid && storedContacts[mappedLid]) stored = storedContacts[mappedLid];
+  } else if (!stored && jid.endsWith('@lid')) {
+    const mappedPn = getPhoneFromLid(jid);
+    if (mappedPn && storedContacts[mappedPn]) stored = storedContacts[mappedPn];
+  }
+
   const profileName = cleanName(message.pushName) || (message.key.fromMe ? cleanName(socket.user?.name) || config.OWNER_NAME : stored?.profileName);
   const phoneNumber = jidNumber(jid) || stored?.phoneNumber || jid;
   const displayName = stored?.savedName || stored?.displayName || profileName || phoneNumber || jid;
@@ -203,7 +413,7 @@ export function getSenderIdentity(message: WAMessage, socket: WASocket): SenderI
     stored.profileName !== profileName ||
     stored.displayName !== displayName
   ) {
-    readContacts()[jid] = {
+    storedContacts[jid] = {
       jid,
       phoneNumber,
       savedName: stored?.savedName,

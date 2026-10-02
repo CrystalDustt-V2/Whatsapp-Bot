@@ -22,7 +22,14 @@ import {
   unwrapMessageInfo,
   type DeletedMessageRecord,
 } from '../services/deleted-message-recovery';
-import { getSenderIdentity, triggerFullContactSync } from '../services/message-memory';
+import {
+  getSenderIdentity,
+  triggerFullContactSync,
+  readContacts,
+  getPhoneFromLid,
+  getLidFromPhone,
+  registerLidMapping,
+} from '../services/message-memory';
 import { sendRecoveredMedia, formatRecord } from '../commands/utility/deleted';
 
 interface ApiServerOptions {
@@ -111,6 +118,8 @@ export class ApiServer {
 
   // Chat latest activity tracking: chatJid -> { timestamp: string, lastText?: string }
   private chatLastActiveMap = new Map<string, { timestamp: string; lastText?: string }>();
+
+  private connectionManager: any = null;
 
   constructor(options: ApiServerOptions = {}) {
     this.port = options.port || 3001;
@@ -580,6 +589,10 @@ export class ApiServer {
     this.io.to('auth').emit('auth:pairing-code', { code });
   }
 
+  setConnectionManager(cm: any) {
+    this.connectionManager = cm;
+  }
+
   private setupMiddleware() {
     this.app.use(cors());
     this.app.use(express.json({ limit: '100mb' }));
@@ -678,6 +691,19 @@ export class ApiServer {
       res.json({ code: this.pairingCode });
     });
 
+    this.app.post('/api/whatsapp/reset-session', this.requireDashboardAuth.bind(this), async (req, res) => {
+      try {
+        if (this.connectionManager && typeof this.connectionManager.resetSession === 'function') {
+          await this.connectionManager.resetSession();
+          res.json({ success: true, message: 'Session credentials purged. Fresh QR / pairing code initiated.' });
+        } else {
+          res.status(500).json({ success: false, error: 'ConnectionManager is not available.' });
+        }
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Failed to reset session' });
+      }
+    });
+
     // -------------------------------------------------------------------------
     // CHATS & GROUPS LIST API
     // -------------------------------------------------------------------------
@@ -735,40 +761,80 @@ export class ApiServer {
         }
 
         const directChatsMap = new Map<string, any>();
+        const allContacts = readContacts();
 
-        const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
-        if (fs.existsSync(contactsPath)) {
-          try {
-            const saved = JSON.parse(fs.readFileSync(contactsPath, 'utf8'));
-            for (const [jid, contact] of Object.entries(saved as Record<string, any>)) {
-              if (jid.endsWith('@g.us') || jid.endsWith('@newsletter')) continue;
-              const live = this.liveMessageStore.get(jid) || [];
-              const lastLive = live[live.length - 1];
-              const cachedActive = this.chatLastActiveMap.get(jid);
-              const lastActive =
-                cachedActive?.timestamp ||
-                lastLive?.timestamp ||
-                contact.updatedAt ||
-                '';
-              const lastMessage =
-                cachedActive?.lastText ||
-                lastLive?.text ||
-                (lastLive?.media ? `[${lastLive.media.kind}]` : '') ||
-                '';
+        // 1. Ingest saved contacts into direct chats map, mapping LIDs to standard phone JIDs
+        for (const [rawKey, contact] of Object.entries(allContacts)) {
+          if (rawKey.endsWith('@g.us') || rawKey.endsWith('@newsletter') || rawKey === 'status@broadcast') continue;
 
-              directChatsMap.set(jid, {
-                id: jid,
-                name: contact.savedName || contact.displayName || contact.profileName || contact.phoneNumber || jid,
-                savedName: contact.savedName || undefined,
-                phoneNumber: contact.phoneNumber || jid.replace(/\D/g, ''),
-                isGroup: false,
-                lastActive,
-                lastMessage,
-              });
+          let primaryJid = rawKey;
+          if (rawKey.endsWith('@lid')) {
+            const mappedPn = getPhoneFromLid(rawKey);
+            if (mappedPn) {
+              primaryJid = mappedPn;
             }
-          } catch {}
+          }
+
+          const live = this.liveMessageStore.get(primaryJid) || [];
+          const lastLive = live[live.length - 1];
+          const cachedActive = this.chatLastActiveMap.get(primaryJid);
+
+          // IMPORTANT: Only assign lastActive if there is genuine message activity, NEVER fallback to contact.updatedAt
+          const lastActive = cachedActive?.timestamp || lastLive?.timestamp || '';
+          const lastMessage =
+            cachedActive?.lastText ||
+            lastLive?.text ||
+            (lastLive?.media ? `[${lastLive.media.kind}]` : '') ||
+            '';
+
+          const existing = directChatsMap.get(primaryJid);
+          const savedName = contact.savedName || existing?.savedName || undefined;
+          const chosenName = savedName || contact.displayName || existing?.name || contact.profileName || contact.phoneNumber || primaryJid;
+          const phoneNum = contact.phoneNumber || (primaryJid.endsWith('@s.whatsapp.net') ? primaryJid.replace(/\D/g, '') : existing?.phoneNumber || '');
+
+          if (existing) {
+            existing.savedName = savedName;
+            existing.name = chosenName;
+            if (phoneNum && !existing.phoneNumber) existing.phoneNumber = phoneNum;
+            if (lastActive && (!existing.lastActive || new Date(lastActive).getTime() > new Date(existing.lastActive).getTime())) {
+              existing.lastActive = lastActive;
+              existing.lastMessage = lastMessage;
+            }
+          } else {
+            directChatsMap.set(primaryJid, {
+              id: primaryJid,
+              name: chosenName,
+              savedName,
+              phoneNumber: phoneNum,
+              isGroup: false,
+              lastActive,
+              lastMessage,
+            });
+          }
         }
 
+        // 2. Include any active conversations from chatLastActiveMap or live store
+        for (const k of this.chatLastActiveMap.keys()) {
+          if (k.endsWith('@g.us') || k.endsWith('@newsletter') || k.endsWith('@broadcast') || k === 'status@broadcast') continue;
+          if (!directChatsMap.has(k)) {
+            const contact = allContacts[k] || (getLidFromPhone(k) ? allContacts[getLidFromPhone(k)!] : undefined);
+            const live = this.liveMessageStore.get(k) || [];
+            const lastLive = live[live.length - 1];
+            const cachedActive = this.chatLastActiveMap.get(k);
+
+            directChatsMap.set(k, {
+              id: k,
+              name: contact?.savedName || contact?.displayName || contact?.profileName || contact?.phoneNumber || k.replace(/\D/g, ''),
+              savedName: contact?.savedName || undefined,
+              phoneNumber: contact?.phoneNumber || k.replace(/\D/g, ''),
+              isGroup: false,
+              lastActive: cachedActive?.timestamp || lastLive?.timestamp || '',
+              lastMessage: cachedActive?.lastText || lastLive?.text || '',
+            });
+          }
+        }
+
+        // 3. Include any deleted chats
         const deletedChats = listDeletedChats();
         for (const item of deletedChats) {
           if (item.chatJid.endsWith('@g.us') || directChatsMap.has(item.chatJid)) continue;
@@ -783,6 +849,7 @@ export class ApiServer {
           });
         }
 
+        // 4. Collect broadcasts & channels
         const broadcastsMap = new Map<string, any>();
         const broadcastJids = new Set<string>();
         for (const k of this.chatLastActiveMap.keys()) {
@@ -795,7 +862,6 @@ export class ApiServer {
             broadcastJids.add(k);
           }
         }
-        // Always include WhatsApp Status Broadcast so it is readily discoverable
         broadcastJids.add('status@broadcast');
 
         for (const bJid of broadcastJids) {
@@ -825,10 +891,18 @@ export class ApiServer {
           });
         }
 
+        // Sort groups: most recent activity first
         groups.sort((a, b) => new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime());
-        const directChats = Array.from(directChatsMap.values()).sort((a, b) =>
-          new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime()
-        );
+
+        // Sort DMs: active messaging chats by latest date first; contacts without messages alphabetically
+        const directChats = Array.from(directChatsMap.values()).sort((a, b) => {
+          const timeA = a.lastActive ? new Date(a.lastActive).getTime() : 0;
+          const timeB = b.lastActive ? new Date(b.lastActive).getTime() : 0;
+          if (timeB !== timeA) return timeB - timeA;
+          return (a.name || '').localeCompare(b.name || '');
+        });
+
+        // Sort broadcasts: latest activity first
         const broadcasts = Array.from(broadcastsMap.values()).sort((a, b) =>
           new Date(b.lastActive || 0).getTime() - new Date(a.lastActive || 0).getTime()
         );
@@ -848,15 +922,28 @@ export class ApiServer {
     });
 
     this.app.get('/api/contacts', this.requireDashboardAuth.bind(this), (req, res) => {
-      const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
-      if (fs.existsSync(contactsPath)) {
-        try {
-          const saved = JSON.parse(fs.readFileSync(contactsPath, 'utf8'));
-          res.json({ success: true, contacts: Object.values(saved) });
-          return;
-        } catch {}
+      const all = readContacts();
+      const uniqueContacts: any[] = [];
+      const seenPn = new Set<string>();
+
+      for (const [k, c] of Object.entries(all)) {
+        if (k.endsWith('@g.us') || k.endsWith('@newsletter') || k === 'status@broadcast') continue;
+        if (k.endsWith('@s.whatsapp.net')) {
+          seenPn.add(k);
+          uniqueContacts.push(c);
+        }
       }
-      res.json({ success: true, contacts: [] });
+
+      for (const [k, c] of Object.entries(all)) {
+        if (k.endsWith('@lid')) {
+          const mappedPn = getPhoneFromLid(k);
+          if (mappedPn && seenPn.has(mappedPn)) continue;
+          uniqueContacts.push(c);
+        }
+      }
+
+      uniqueContacts.sort((a, b) => (a.savedName || a.displayName || '').localeCompare(b.savedName || b.displayName || ''));
+      res.json({ success: true, contacts: uniqueContacts });
     });
 
     this.app.post('/api/contacts/sync', this.requireDashboardAuth.bind(this), async (req, res) => {
@@ -866,13 +953,7 @@ export class ApiServer {
       }
       try {
         const result = await triggerFullContactSync(botSocket);
-        const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
-        let contacts: any[] = [];
-        if (fs.existsSync(contactsPath)) {
-          try {
-            contacts = Object.values(JSON.parse(fs.readFileSync(contactsPath, 'utf8')));
-          } catch {}
-        }
+        const contacts = Object.values(readContacts());
         this.io.to('auth').emit('contacts:updated', { count: contacts.length });
         res.json({ success: true, count: contacts.length, error: result.error });
       } catch (err: any) {
