@@ -24,6 +24,7 @@ type AiMemoryEntry = {
   fromMe: boolean;
   messageType: string;
   text: string;
+  editedAt?: string;
 };
 
 const contactsPath = path.join(config.SESSION_PATH, 'contacts.json');
@@ -488,6 +489,9 @@ export function recordAiMemoryMessage(
   timestampSeconds: number
 ): void {
   if (!config.AI_MEMORY_ENABLED) return;
+  const content = message.message?.ephemeralMessage?.message || message.message;
+  // Edit events update the original entry rather than adding protocol placeholders.
+  if (content?.editedMessage || content?.protocolMessage?.type === 14) return;
 
   try {
     ensureDir(aiMemoryPath);
@@ -520,6 +524,25 @@ export function recordAiMemoryMessage(
   } catch (err) {
     logger.warn({ err }, 'Could not write AI memory message');
   }
+}
+
+export function editAiMemoryMessage(chatJids: string[], messageId: string, text: string, messageType: string, editedAt: string): void {
+  if (!fs.existsSync(aiMemoryPath)) return;
+  let changed = false;
+  const lines = fs.readFileSync(aiMemoryPath, 'utf8').split(/\r?\n/);
+  const updated = lines.map((line) => {
+    const entry = safeJsonParse(line);
+    if (!entry || !chatJids.includes(entry.chatJid) || entry.messageId !== messageId || (entry.editedAt && entry.editedAt >= editedAt)) return line;
+    changed = true;
+    return JSON.stringify({ ...entry, text: text.slice(0, maxTextChars()), messageType, editedAt });
+  });
+  if (!changed) return;
+  fs.writeFileSync(`${aiMemoryPath}.tmp`, updated.join('\n'), 'utf8');
+  fs.renameSync(`${aiMemoryPath}.tmp`, aiMemoryPath);
+}
+
+export function findAiMemoryMessage(chatJids: string[], messageId: string): AiMemoryEntry | undefined {
+  return readMemoryEntries().find((entry) => chatJids.includes(entry.chatJid) && entry.messageId === messageId);
 }
 
 export function readAiMemoryContext(chatJid: string, maxChars = 30000): string {

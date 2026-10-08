@@ -33,6 +33,7 @@ import { ConnectionManager } from './core/connection-manager';
 import logger from './core/logger';
 import { MessageHandler } from './core/message-handler';
 import { syncContacts, triggerFullContactSync } from './services/message-memory';
+import { getReminderService } from './services/reminders';
 
 async function main() {
   logger.info('Starting WhatsApp Hybrid Bot...');
@@ -84,6 +85,11 @@ async function main() {
       logger.info('');
 
       apiServer.setBotSocket(socket);
+      try {
+        getReminderService().start(socket);
+      } catch (err) {
+        logger.error({ err }, 'Could not load saved reminders');
+      }
 
       // Trigger automatic comprehensive contact sync from primary phone in the background
       triggerFullContactSync(socket)
@@ -163,8 +169,10 @@ async function main() {
         }
       });
 
-      socket.ev.on('messaging-history.set', ({ contacts, chats }) => {
+      socket.ev.on('messaging-history.set', ({ contacts, chats, messages }) => {
         try {
+          apiServer.handleChatsUpdate(chats || []);
+          apiServer.handleMessageUpdates((messages || []).map((message) => ({ key: message.key, update: message })));
           if (contacts && contacts.length) {
             syncContacts(contacts);
           }
@@ -182,6 +190,7 @@ async function main() {
 
       socket.ev.on('chats.upsert', (newChats) => {
         try {
+          apiServer.handleChatsUpdate(newChats);
           const direct = newChats
             .filter((ch) => ch.id && !ch.id.endsWith('@g.us') && !ch.id.endsWith('@newsletter') && (ch as any).name)
             .map((ch) => ({ id: ch.id, name: (ch as any).name }));
@@ -196,6 +205,7 @@ async function main() {
 
       socket.ev.on('chats.update', (updates) => {
         try {
+          apiServer.handleChatsUpdate(updates);
           const direct = updates
             .filter((ch) => ch.id && !ch.id.endsWith('@g.us') && !ch.id.endsWith('@newsletter') && (ch as any).name)
             .map((ch) => ({ id: ch.id, name: (ch as any).name }));
@@ -220,9 +230,22 @@ async function main() {
       });
 
       socket.ev.on('messages.update', async (updates) => {
+        try {
+          apiServer.handleMessageUpdates(updates);
+        } catch (err) {
+          logger.warn({ err }, 'Could not persist dashboard message updates');
+        }
         for (const update of updates) {
           await messageHandler.handleMessageUpdate(update);
         }
+      });
+
+      socket.ev.on('message-receipt.update', (updates) => {
+        apiServer.handleMessageReceipts(updates);
+      });
+
+      socket.ev.on('messages.reaction', (updates) => {
+        apiServer.handleMessageReactions(updates);
       });
 
       socket.ev.on('messages.delete', async (update) => {
@@ -231,6 +254,7 @@ async function main() {
     },
     async onDisconnected() {
       apiServer.clearBotSocket();
+      try { getReminderService().stop(); } catch (err) { logger.warn({ err }, 'Could not stop reminders'); }
     },
   });
 

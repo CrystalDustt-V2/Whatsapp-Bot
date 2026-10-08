@@ -57,6 +57,9 @@ import {
   deleted,
   viewonce,
   qr,
+  qrread,
+  ocr,
+  stt,
   upside,
   nickname,
   fakeid,
@@ -75,6 +78,7 @@ import {
   renamefile,
   download,
   tts,
+  translate,
   textcase,
   wordcount,
   codesnippet,
@@ -247,6 +251,9 @@ export function loadCommands(): void {
   commandRegistry.register(deleted);
   commandRegistry.register(viewonce);
   commandRegistry.register(qr);
+  commandRegistry.register(qrread);
+  commandRegistry.register(ocr);
+  commandRegistry.register(stt);
   commandRegistry.register(upside);
   commandRegistry.register(nickname);
   commandRegistry.register(fakeid);
@@ -265,6 +272,7 @@ export function loadCommands(): void {
   commandRegistry.register(renamefile);
   commandRegistry.register(download);
   commandRegistry.register(tts);
+  commandRegistry.register(translate);
   commandRegistry.register(textcase);
   commandRegistry.register(wordcount);
   commandRegistry.register(codesnippet);

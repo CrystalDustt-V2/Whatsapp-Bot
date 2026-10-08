@@ -7,7 +7,8 @@ export { UrlDecodeCommand as urldecode } from './urldecode';
 export { PasswordCommand as password } from './password';
 export { DeletedMessageCommand as deleted } from './deleted';
 export { ViewOnceCommand as viewonce } from './viewonce';
-export { QRCommand as qr } from './qr';
+export { QRCommand as qr, QRReaderCommand as qrread } from './qr';
+export { OCRCommand as ocr, SpeechToTextCommand as stt } from './extract';
 export { UpsideDownCommand as upside } from './upside';
 export { NicknameCommand as nickname, FakeIdentityCommand as fakeid, ColorCommand as color } from './random';
 export { CountdownCommand as countdown } from './countdown';
@@ -25,6 +26,7 @@ export { UserAgentCommand as useragent } from './useragent';
 export { ShortUrlCommand as shorturl } from './shorturl';
 export { RenameFileCommand as renamefile, DownloadFileCommand as download } from './file';
 export { TextToSpeechCommand as tts } from './tts';
+export { TranslateCommand as translate } from './translate';
 export {
   TextCaseCommand as textcase,
   WordCountCommand as wordcount,

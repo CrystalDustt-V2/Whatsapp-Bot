@@ -1,11 +1,14 @@
 import config from '../../config';
 import { Command, CommandCategory } from '../../types';
+import { getQuotedText } from '../../services/message-text';
+import aiService from '../../services/ai-service';
 
 const AI_API_BASE_URL = (config.AI_API_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 const AI_API_KEY = config.AI_API_KEY || config.OPENROUTER_API_KEY;
 const AI_TTS_API_BASE_URL = (config.AI_TTS_API_BASE_URL || AI_API_BASE_URL).replace(/\/$/, '');
 const AI_TTS_API_KEY = config.AI_TTS_API_KEY || AI_API_KEY;
 const IS_TTS_POLLINATIONS = AI_TTS_API_BASE_URL.includes('pollinations.ai');
+const IS_TTS_PUTER = AI_TTS_API_BASE_URL.toLowerCase() === 'puter';
 const AI_TTS_MODEL = config.AI_TTS_MODEL || (IS_TTS_POLLINATIONS ? 'openai-audio' : config.OPENROUTER_TTS_MODEL);
 const AI_TTS_VOICE = config.AI_TTS_VOICE || (IS_TTS_POLLINATIONS ? 'nova' : config.OPENROUTER_TTS_VOICE);
 
@@ -20,6 +23,15 @@ function headers(): Record<string, string> {
 }
 
 async function generateSpeech(text: string): Promise<{ buffer: Buffer; mimetype: string }> {
+  if (IS_TTS_PUTER) {
+    if (!config.PUTER_AUTH_TOKEN?.trim()) throw new Error('missing-puter-token');
+    const audio = await aiService.textToSpeech(text, {
+      model: config.PUTER_TTS_MODEL || config.AI_TTS_MODEL,
+      voice: config.PUTER_TTS_VOICE || config.AI_TTS_VOICE,
+      timeoutMs: config.PUTER_TIMEOUT_MS,
+    });
+    return { buffer: audio.buffer, mimetype: audio.mimeType };
+  }
   if (!AI_TTS_MODEL) throw new Error('missing-model');
   if (!AI_TTS_API_KEY && !IS_TTS_POLLINATIONS) throw new Error('missing-key');
 
@@ -52,13 +64,16 @@ export const TextToSpeechCommand: Command = {
   aliases: ['say', 'voice', 'texttospeech'],
   category: CommandCategory.UTILITY,
   description: 'Convert text to speech audio',
-  usage: 'tts <text>',
+  usage: 'tts <text> (or reply to text with tts)',
+  limits: '2990 characters with Puter; 4000 with other configured providers',
   async execute(ctx) {
-    const text = (ctx.rawArgs || ctx.args.join(' ')).trim();
+    const text = (ctx.rawArgs || ctx.args.join(' ')).trim() || getQuotedText(ctx);
     if (!text) {
-      await ctx.reply('Usage: .tts <text>');
+      await ctx.reply('Usage: .tts <text>, or reply to a text message with .tts.');
       return;
     }
+    const maxLength = IS_TTS_PUTER ? 2990 : 4000;
+    if (text.length > maxLength) { await ctx.reply(`Speech text must be at most ${maxLength} characters.`); return; }
 
     try {
       const audio = await generateSpeech(text);
@@ -68,7 +83,9 @@ export const TextToSpeechCommand: Command = {
         ptt: true,
       });
     } catch (err) {
-      const message = err instanceof Error && err.message === 'missing-key'
+      const message = err instanceof Error && err.message === 'missing-puter-token'
+        ? 'Set PUTER_AUTH_TOKEN to enable .tts with Puter.'
+        : err instanceof Error && err.message === 'missing-key'
         ? 'Set AI_TTS_API_KEY or AI_API_KEY first to use .tts.'
         : err instanceof Error && err.message === 'missing-model'
           ? 'Set AI_TTS_MODEL first to use .tts.'

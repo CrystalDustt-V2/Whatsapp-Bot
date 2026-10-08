@@ -1230,6 +1230,8 @@
         <span class="icon">🚀</span>
         <span>Command Runner</span>
       </button>
+      <button class="nav-btn" onclick="switchTab('starred')"><span class="icon">⭐</span><span>Starred Messages</span></button>
+      <button class="nav-btn" onclick="switchTab('outbound')"><span class="icon">⏳</span><span>Queued Messages</span></button>
       <button class="nav-btn" onclick="switchTab('vault')">
         <span class="icon">👁️</span>
         <span>Recovery Vault</span>
@@ -1365,6 +1367,9 @@
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;" id="current-chat-controls">
                 <input type="text" id="chat-search-messages" placeholder="🔍 Search in chat..." oninput="filterChatMessages(this.value)" style="width:125px;padding:4px 8px;font-size:11.5px;background:#151d2c;border:1px solid var(--border);border-radius:8px;color:var(--text);">
                 <button class="btn btn-secondary" id="btn-group-info" style="display:none;padding:5px 9px;font-size:12px;" onclick="openGroupInfoModal()" title="View Group Details & Admin Settings">👥 Info</button>
+                <select id="chat-ephemeral-select" onchange="changeEphemeralTimer(this.value)" title="Disappearing messages" style="background:#151d2c;border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:8px;font-size:12px;">
+                  <option value="">Disappearing: Unknown</option><option value="0">Disappearing: Off</option><option value="86400">24 hours</option><option value="604800">7 days</option><option value="7776000">90 days</option>
+                </select>
                 <button class="btn btn-secondary" id="btn-view-scheduled" style="padding:5px 8px;font-size:12px;display:inline-flex;align-items:center;gap:4px;" onclick="openScheduledModal()" title="View & manage scheduled messages">⏰ <span id="badge-scheduled-count" style="display:none;background:#38bdf8;color:#000;border-radius:10px;padding:0 5px;font-size:10px;font-weight:700;">0</span></button>
                 <select id="chat-presence-select" onchange="changeChatPresence(this.value)" style="background:#151d2c;border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:8px;font-size:12px;cursor:pointer;">
                   <option value="">Presence: Normal</option>
@@ -1464,6 +1469,7 @@
                     <input type="checkbox" id="queue-on-mute-check">
                     <span>⏳ Queue on Mute</span>
                   </label>
+                  <label class="queue-toggle" title="Keep text messages queued while WhatsApp is disconnected"><input type="checkbox" id="queue-offline-check"><span>Queue when offline</span></label>
                 </div>
               </div>
 
@@ -1489,6 +1495,16 @@
       <!-- =================================================================== -->
       <!-- TAB 3: MULTI-COMMAND RUNNER -->
       <!-- =================================================================== -->
+      <section id="tab-starred" class="tab-content">
+        <h2>⭐ Starred Messages</h2>
+        <button class="btn btn-secondary" onclick="fetchStarredMessages()">Refresh</button>
+        <div id="starred-messages-list" style="display:flex;flex-direction:column;gap:12px;margin-top:16px;"></div>
+      </section>
+      <section id="tab-outbound" class="tab-content">
+        <h2>⏳ Queued Messages</h2>
+        <button class="btn btn-secondary" onclick="fetchOutboundMessages()">Refresh</button>
+        <div id="outbound-messages-list" style="display:flex;flex-direction:column;gap:12px;margin-top:16px;"></div>
+      </section>
       <section id="tab-commands" class="tab-content">
         <div class="card" style="margin-bottom:20px;">
           <div class="card-title">
@@ -2216,6 +2232,8 @@
 
       if (tabId === 'chats' && !chatsCache.groups.length) fetchChats();
       if (tabId === 'vault') fetchVaultData();
+      if (tabId === 'starred') fetchStarredMessages();
+      if (tabId === 'outbound') fetchOutboundMessages();
     }
 
     // Auth & Status
@@ -2798,7 +2816,8 @@
       }
 
       renderChatList();
-      loadMessagesForSelectedChat(true);
+      loadEphemeralTimer(selectedChat.id);
+      return loadMessagesForSelectedChat(true);
     }
 
     async function loadMessagesForSelectedChat(forceScroll = false) {
@@ -2974,7 +2993,7 @@
       let reactionsHtml = '';
       if (msg.reactions && Object.keys(msg.reactions).length > 0) {
         const pills = Object.entries(msg.reactions)
-          .map(([emoji, count]) => `<span>${emoji} ${count > 1 ? count : ''}</span>`)
+          .map(([emoji, count]) => `<span>${escapeHtml(emoji)} ${count > 1 ? count : ''}</span>`)
           .join(' ');
         reactionsHtml = `<div class="bubble-reactions-pill">${pills}</div>`;
       }
@@ -3003,6 +3022,8 @@
             ${replyBtn}
             <button class="action-emoji-btn" onclick="copyMessageText('${escapeHtml(msg.id)}')" title="Copy message text">📋</button>
             <button class="action-emoji-btn" onclick="showMessageInfo('${escapeHtml(msg.id)}')" title="Message info & details">ℹ️</button>
+            <button class="action-emoji-btn" onclick="toggleMessageStar('${escapeHtml(msg.id)}')" title="${msg.starred ? 'Unstar' : 'Star'} message">${msg.starred ? '⭐' : '☆'}</button>
+            ${isOut && !msg.media && !msg.poll && !msg.contact && !msg.location && !msg.isDeleted && Date.now() - new Date(msg.timestamp).getTime() <= 900000 ? `<button class="action-emoji-btn" onclick="editChatMessage('${escapeHtml(msg.id)}')" title="Edit message">✏️</button>` : ''}
             <button class="action-emoji-btn" onclick="openForwardModal('${escapeHtml(msg.id)}')" title="Batch forward to multiple chats">↗️</button>
             ${revokeBtn}
           </div>
@@ -3029,8 +3050,10 @@
             ${pollHtml}
             ${textContent ? `<div style="white-space:pre-wrap;">${textContent}</div>` : ''}
             <div class="bubble-meta">
+              ${msg.isEdited ? '<span>edited</span>' : ''}
+              ${msg.starred ? '<span title="Starred">⭐</span>' : ''}
               <span>${time}</span>
-              ${isOut ? '<span>✓✓</span>' : ''}
+              ${isOut ? `<span id="msg-status-${escapeHtml(msg.id)}" title="${messageStatusLabel(msg)}" style="color:${messageStatusColor(msg)}">${messageStatusIcon(msg)}</span>` : ''}
             </div>
             ${reactionsHtml}
           </div>
@@ -4175,6 +4198,7 @@
       }
     }
 
+    let pendingQueuedRequest = null;
     async function sendChatMessage() {
       if (!selectedChat) {
         alert('Please select a chat or group first.');
@@ -4186,6 +4210,9 @@
       const bypassAdmin = document.getElementById('bypass-admin-check')?.checked;
       const queueOnMute = document.getElementById('queue-on-mute-check')?.checked;
       const mentionAll = document.getElementById('mention-all-check')?.checked;
+      const signature = JSON.stringify({ jid: selectedChat.id, text, quotedMessageId: activeReplyQuote?.id, mentionAll, queueOnMute,
+        queueOnOffline: Boolean(document.getElementById('queue-offline-check')?.checked) });
+      if (pendingQueuedRequest?.signature !== signature) pendingQueuedRequest = { signature, requestId: crypto.randomUUID() };
       const sendBtn = document.getElementById('btn-send-chat');
       sendBtn.disabled = true;
       sendBtn.innerHTML = 'Sending...';
@@ -4199,12 +4226,15 @@
             text,
             bypassAdminOnly: bypassAdmin,
             queueOnMute,
+            queueOnOffline: Boolean(document.getElementById('queue-offline-check')?.checked),
+            requestId: pendingQueuedRequest.requestId,
             quotedMessageId: activeReplyQuote?.id,
             mentionAll,
           }),
         });
         const data = await res.json();
         if (data.success) {
+          pendingQueuedRequest = null;
           document.getElementById('chat-message-input').value = '';
           cancelReplyQuote();
           if (document.getElementById('mention-all-check')) {
@@ -4226,11 +4256,117 @@
       }
     }
 
+    // --- Edits, stars, disappearing settings and persistent outbound messages ---
+    let starredMessages = [];
+
+    async function dashboardRequest(url, options) {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    async function editChatMessage(messageId) {
+      const message = currentMessages.find((entry) => entry.id === messageId);
+      const jid = selectedChat?.id;
+      if (!message || !jid) return;
+      const text = prompt('Edit message:', message.text || '');
+      if (text == null || !text.trim() || text.trim() === message.text) return;
+      try {
+        await dashboardRequest(`/api/chats/${encodeURIComponent(jid)}/edit-message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId, text }) });
+      } catch (err) { showToast(err.message); }
+    }
+
+    async function setMessageStar(jid, messageId, starred) {
+      try {
+        await dashboardRequest(`/api/chats/${encodeURIComponent(jid)}/star`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId, starred }) });
+        if (document.getElementById('tab-starred').classList.contains('active')) fetchStarredMessages();
+      } catch (err) { showToast(err.message); }
+    }
+
+    function toggleMessageStar(messageId) {
+      const message = currentMessages.find((entry) => entry.id === messageId);
+      if (selectedChat && message) setMessageStar(selectedChat.id, messageId, !message.starred);
+    }
+
+    async function fetchStarredMessages() {
+      const container = document.getElementById('starred-messages-list');
+      try {
+        const data = await dashboardRequest('/api/starred-messages');
+        starredMessages = data.messages || [];
+        container.innerHTML = starredMessages.map((record) => `
+          <div class="info-card-section">
+            <div class="info-card-header">${escapeHtml(record.chatJid)}</div>
+            <div style="white-space:pre-wrap;margin:8px 0;">${escapeHtml(record.message?.text || '[Message content unavailable]')}</div>
+            <button class="btn btn-secondary" data-jid="${escapeHtml(record.chatJid)}" data-id="${escapeHtml(record.messageId)}" onclick="openStarredChat(this.dataset.jid, this.dataset.id)">Open chat</button>
+            <button class="btn btn-secondary" data-jid="${escapeHtml(record.chatJid)}" data-id="${escapeHtml(record.messageId)}" onclick="setMessageStar(this.dataset.jid, this.dataset.id, false)">Unstar</button>
+          </div>`).join('') || '<p>No starred messages.</p>';
+      } catch (err) { container.textContent = err.message; }
+    }
+
+    async function openStarredChat(jid, messageId) {
+      switchTab('chats');
+      await selectChat(jid, jid.endsWith('@g.us'), jid.endsWith('@broadcast') || jid.endsWith('@newsletter'));
+      if (selectedChat?.id !== jid) return;
+      const record = starredMessages.find((entry) => entry.chatJid === jid && entry.messageId === messageId);
+      if (!currentMessages.some((message) => message.id === messageId) && record?.message) {
+        currentMessages.push(record.message);
+        currentMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        renderMessagesList(false);
+      }
+      document.getElementById(`msg-row-${messageId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+
+    async function loadEphemeralTimer(jid) {
+      const select = document.getElementById('chat-ephemeral-select');
+      select.value = '';
+      select.disabled = !/@(g\.us|s\.whatsapp\.net|lid)$/.test(jid);
+      if (select.disabled) return;
+      try {
+        const data = await dashboardRequest(`/api/chats/${encodeURIComponent(jid)}/ephemeral`);
+        if (selectedChat?.id === jid) select.value = data.duration == null ? '' : String(data.duration);
+      } catch (err) { if (selectedChat?.id === jid) showToast(err.message); }
+    }
+
+    async function changeEphemeralTimer(value) {
+      const jid = selectedChat?.id;
+      if (!jid || value === '') return;
+      const select = document.getElementById('chat-ephemeral-select');
+      select.disabled = true;
+      try {
+        await dashboardRequest(`/api/chats/${encodeURIComponent(jid)}/ephemeral`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ duration: Number(value) }) });
+        showToast('Disappearing-message timer updated');
+      } catch (err) { showToast(err.message); }
+      finally { if (selectedChat?.id === jid) { select.disabled = false; loadEphemeralTimer(jid); } }
+    }
+
+    async function fetchOutboundMessages() {
+      const container = document.getElementById('outbound-messages-list');
+      try {
+        const data = await dashboardRequest('/api/outbound');
+        container.innerHTML = (data.messages || []).map((message) => `
+          <div class="info-card-section">
+            <div class="info-card-header">${escapeHtml(message.chatJid)} · ${escapeHtml(message.state)}</div>
+            <div style="white-space:pre-wrap;margin:8px 0;">${escapeHtml(message.text)}</div>
+            ${message.error ? `<p>${escapeHtml(message.error)}</p>` : ''}
+            ${message.state === 'failed' ? `<button class="btn btn-secondary" data-id="${escapeHtml(message.jobId)}" onclick="manageQueuedMessage(this.dataset.id, 'retry')">Retry</button>` : ''}
+            ${message.state !== 'active' ? `<button class="btn btn-secondary" data-id="${escapeHtml(message.jobId)}" onclick="manageQueuedMessage(this.dataset.id, 'cancel')">Cancel</button>` : ''}
+          </div>`).join('') || '<p>No queued messages.</p>';
+      } catch (err) { container.textContent = err.message; }
+    }
+
+    async function manageQueuedMessage(id, action) {
+      try {
+        await dashboardRequest(`/api/outbound/${encodeURIComponent(id)}${action === 'retry' ? '/retry' : ''}`, { method: action === 'retry' ? 'POST' : 'DELETE' });
+        fetchOutboundMessages();
+      } catch (err) { showToast(err.message); }
+    }
+
     // --- Send Reaction ---
     async function sendEmojiReaction(messageId, emoji, participant, fromMe) {
       if (!selectedChat) return;
       try {
-        await fetch('/api/chats/send-reaction', {
+        const res = await fetch('/api/chats/send-reaction', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -4241,8 +4377,13 @@
             fromMe: Boolean(fromMe),
           }),
         });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to send reaction');
+        return true;
       } catch (err) {
         console.error('Failed to send reaction:', err);
+        showToast(err.message || 'Failed to send reaction');
+        return false;
       }
     }
 
@@ -4543,7 +4684,7 @@
       }
       const { messageId, participant, fromMe } = pendingEmojiTarget;
       closeModal('modal-custom-emoji');
-      await sendEmojiReaction(messageId, emoji, participant, fromMe);
+      if (!await sendEmojiReaction(messageId, emoji, participant, fromMe)) return;
       if (emoji) {
         showToast(`Reacted with ${emoji}`);
       } else {
@@ -4553,6 +4694,24 @@
 
     // --- Message Information Modal Engine ---
     let currentInfoMessage = null;
+
+    function messageStatusLabel(msg) {
+      if (!msg.fromMe) return 'Received';
+      return ({ error: 'Failed', pending: 'Pending', sent: 'Sent to server', delivered: 'Delivered', read: 'Read', played: 'Played' })[msg.status] || 'Unknown';
+    }
+
+    function messageStatusIcon(msg) {
+      return ({ error: '!', pending: '◷', sent: '✓', delivered: '✓✓', read: '✓✓', played: '▶' })[msg.status] || '?';
+    }
+
+    function messageStatusColor(msg) {
+      return msg.status === 'read' || msg.status === 'played' ? '#38bdf8' : msg.status === 'error' ? '#fb7185' : 'var(--text-dim)';
+    }
+
+    function receiptTime(value) {
+      if (!value || !Number.isFinite(new Date(value).getTime())) return 'Unavailable';
+      return escapeHtml(new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' }));
+    }
 
     function showMessageInfo(messageId) {
       const msg = currentMessages.find((m) => m.id === messageId);
@@ -4572,6 +4731,15 @@
       const senderPhone = msg.senderNumber ? `+${msg.senderNumber}` : 'N/A';
       const senderJid = msg.senderJid || 'N/A';
       const chatJid = msg.chatJid || (selectedChat ? selectedChat.id : 'N/A');
+      const receipts = msg.receipts || [];
+      const receiptRows = receipts.map((receipt) => `
+        <div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.08);">
+          <div style="font-size:12px;overflow-wrap:anywhere;">${escapeHtml(receipt.userJid)}</div>
+          <div class="info-row"><span class="info-label">Delivered</span><span class="info-val">${receiptTime(receipt.deliveredAt)}</span></div>
+          <div class="info-row"><span class="info-label">Read</span><span class="info-val">${receiptTime(receipt.readAt)}</span></div>
+          <div class="info-row"><span class="info-label">Played</span><span class="info-val">${receiptTime(receipt.playedAt)}</span></div>
+        </div>
+      `).join('');
 
       // Reactions breakdown
       let reactionsSection = '';
@@ -4580,7 +4748,7 @@
           .map(
             ([emoji, count]) => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:12px;">
-            <span style="font-size:16px;">${emoji}</span>
+            <span style="font-size:16px;">${escapeHtml(emoji)}</span>
             <span style="color:var(--text-muted);font-weight:600;">${count} reaction${count > 1 ? 's' : ''}</span>
           </div>
         `
@@ -4614,7 +4782,7 @@
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 12px;position:relative;">
           <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
             <span>${isOut ? 'Outgoing Message' : 'Incoming Message'}</span>
-            <span style="color:${isOut ? '#38bdf8' : '#34d399'};font-weight:700;">${isOut ? '✓✓ Sent' : 'Received'}</span>
+            <span style="color:${isOut ? messageStatusColor(msg) : '#34d399'};font-weight:700;">${messageStatusLabel(msg)}</span>
           </div>
           <div style="font-size:13px;color:var(--text);white-space:pre-wrap;max-height:100px;overflow-y:auto;">
             ${previewText || '<span style="color:var(--text-dim);font-style:italic;">No text payload</span>'}
@@ -4641,8 +4809,19 @@
           </div>
           <div class="info-row">
             <span class="info-label">Delivery Status</span>
-            <span class="info-val">${isOut ? '✓✓ Read / Delivered' : '✓✓ Intercepted'}</span>
+            <span class="info-val">${messageStatusLabel(msg)}</span>
           </div>
+          <div class="info-row"><span class="info-label">Edited</span><span class="info-val">${msg.isEdited ? receiptTime(msg.editedAt) : 'No'}</span></div>
+          <div class="info-row">
+            <span class="info-label">WhatsApp Timestamp</span>
+            <span class="info-val">${receiptTime(msg.serverTimestamp)}</span>
+          </div>
+        </div>
+
+        <div class="info-card-section">
+          <div class="info-card-header">Recipient Receipts (${receipts.length})</div>
+          ${receiptRows || '<div style="font-size:12px;color:var(--text-dim);">No recipient timestamps available.</div>'}
+          <div style="font-size:11px;color:var(--text-dim);margin-top:8px;">Exact times appear only when supplied by WhatsApp. Group receipts apply to each listed recipient.</div>
         </div>
 
         <!-- Participant & Sender Details -->
@@ -4662,6 +4841,10 @@
               <span>${escapeHtml(senderJid)}</span>
               <button class="btn-copy-mini" onclick="copyToClipboard('${senderJid}', 'Sender JID copied!')">Copy</button>
             </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Sender LID</span>
+            <span class="info-val">${escapeHtml(msg.senderLid || (senderJid.endsWith('@lid') ? senderJid : 'Unavailable'))}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Chat JID</span>
@@ -4685,6 +4868,18 @@
           <div class="info-row">
             <span class="info-label">Protocol Type</span>
             <span class="info-val"><code style="color:#38bdf8;">${escapeHtml(msg.type || 'conversation')}</code></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Status Code</span>
+            <span class="info-val">${escapeHtml(String(msg.statusCode ?? 'Unavailable'))}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Message Stub Type</span>
+            <span class="info-val">${escapeHtml(String(msg.messageStubType ?? 'None'))}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Stub Details</span>
+            <span class="info-val">${escapeHtml((msg.messageStubParameters || []).join(', ') || 'None')}</span>
           </div>
           <div class="info-row">
             <span class="info-label">View-Once Media</span>
@@ -5480,7 +5675,7 @@
         log.innerHTML += `\n[${time}] ${escapeHtml(JSON.stringify(activity))}`;
         log.scrollTop = log.scrollHeight;
 
-        if (activity && activity.type === 'queue:drained') {
+        if (activity && ['queue:drained', 'queue:sent', 'queue:unlocked'].includes(activity.type)) {
           if (selectedChat && selectedChat.id === activity.groupJid) {
             loadMessagesForSelectedChat(true);
           }
@@ -5520,6 +5715,23 @@
         fetchChats();
       });
 
+      socket.on('chat:message-info', (data) => {
+        if (!selectedChat || data.chatJid !== selectedChat.id) return;
+        const target = currentMessages.find((message) => message.id === data.messageId);
+        if (!target) return;
+        const { chatJid, messageId, ...info } = data;
+        Object.assign(target, info);
+        const statusEl = document.getElementById(`msg-status-${target.id}`);
+        if (statusEl) {
+          statusEl.textContent = messageStatusIcon(target);
+          statusEl.title = messageStatusLabel(target);
+          statusEl.style.color = messageStatusColor(target);
+        }
+        if (currentInfoMessage?.id === target.id && currentInfoMessage?.chatJid === target.chatJid && document.getElementById('modal-message-info')?.classList.contains('active')) {
+          showMessageInfo(target.id);
+        }
+      });
+
       socket.on('chat:message-deleted', (data) => {
         if (selectedChat && data.chatJid === selectedChat.id) {
           const target = currentMessages.find((m) => m.id === data.messageId);
@@ -5534,16 +5746,35 @@
         if (selectedChat && data.chatJid === selectedChat.id) {
           const target = currentMessages.find((m) => m.id === data.messageId);
           if (target) {
-            if (!target.reactions) target.reactions = {};
-            if (data.emoji) {
-              target.reactions[data.emoji] = (target.reactions[data.emoji] || 0) + 1;
-            }
+            target.reactions = data.reactions || {};
             renderMessagesList(false);
+            if (currentInfoMessage?.id === target.id && currentInfoMessage?.chatJid === target.chatJid && document.getElementById('modal-message-info')?.classList.contains('active')) {
+              showMessageInfo(target.id);
+            }
           }
         }
       });
 
       socket.on('chat:scheduled-update', (list) => updateScheduledBadge(list));
+
+      socket.on('chat:message-edited', (data) => {
+        if (selectedChat?.id !== data.chatJid) return;
+        const target = currentMessages.find((message) => message.id === data.messageId);
+        if (!target) return;
+        Object.assign(target, { text: data.text, type: data.type, isEdited: true, editedAt: data.editedAt });
+        renderMessagesList(false);
+        if (currentInfoMessage?.id === target.id && document.getElementById('modal-message-info')?.classList.contains('active')) showMessageInfo(target.id);
+      });
+      socket.on('chat:message-starred', (data) => {
+        if (selectedChat?.id === data.chatJid) {
+          const target = currentMessages.find((message) => message.id === data.messageId);
+          if (target) { target.starred = data.starred; renderMessagesList(false); }
+        }
+        if (document.getElementById('tab-starred').classList.contains('active')) fetchStarredMessages();
+      });
+      socket.on('chat:ephemeral', (data) => {
+        if (selectedChat?.id === data.chatJid) document.getElementById('chat-ephemeral-select').value = String(data.duration);
+      });
     }
 
     function formatSeconds(sec) {

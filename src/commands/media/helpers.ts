@@ -12,6 +12,13 @@ export interface DownloadedMedia {
   extension: string;
 }
 
+export class MediaSizeError extends Error {
+  constructor(maxBytes: number) {
+    super(`Media exceeds the ${Math.floor(maxBytes / (1024 * 1024))} MB limit.`);
+    this.name = 'MediaSizeError';
+  }
+}
+
 type AnyMediaMessage =
   | proto.Message.IImageMessage
   | proto.Message.IVideoMessage
@@ -81,18 +88,23 @@ function extensionFromMedia(media: AnyMediaMessage, kind: DownloadableMediaKind)
 
 export async function downloadMediaFromContext(
   ctx: BotContext,
-  allowedKinds: DownloadableMediaKind[]
+  allowedKinds: DownloadableMediaKind[],
+  maxBytes = Infinity
 ): Promise<DownloadedMedia | null> {
   const message = unwrapMessage(ctx.message.message);
   const quotedMessage = unwrapMessage(message?.extendedTextMessage?.contextInfo?.quotedMessage);
   const found = getMedia(message, allowedKinds) || getMedia(quotedMessage, allowedKinds);
 
   if (!found) return null;
+  if (Number(found.media.fileLength) > maxBytes) throw new MediaSizeError(maxBytes);
 
   const stream = await downloadContentFromMessage(found.media as any, found.kind as MediaType);
   const chunks: Buffer[] = [];
+  let size = 0;
 
   for await (const chunk of stream) {
+    size += chunk.length;
+    if (size > maxBytes) throw new MediaSizeError(maxBytes);
     chunks.push(chunk);
   }
 

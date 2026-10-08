@@ -1,4 +1,4 @@
-import type { GroupMetadata, WAMessage, WASocket } from '@whiskeysockets/baileys';
+import type { BaileysEventMap, GroupMetadata, MessageUserReceiptUpdate, WAMessage, WAMessageUpdate, WASocket } from '@whiskeysockets/baileys';
 import cors from 'cors';
 import crypto from 'crypto';
 import express from 'express';
@@ -29,14 +29,19 @@ import {
   getPhoneFromLid,
   getLidFromPhone,
   registerLidMapping,
+  editAiMemoryMessage,
+  findAiMemoryMessage,
 } from '../services/message-memory';
 import { sendRecoveredMedia, formatRecord } from '../commands/utility/deleted';
+import { messageInfo, mergeMessageInfo, receiptInfo, whatsappTimestamp, type DashboardMessageInfo } from '../services/dashboard-message-info';
+import { DashboardState } from '../services/dashboard-state';
+import { OutboundQueue, UnrecoverableError, type OutboundMessage } from './outbound-queue';
 
 interface ApiServerOptions {
   port?: number;
 }
 
-export interface DashboardChatMessage {
+export interface DashboardChatMessage extends DashboardMessageInfo {
   id: string;
   chatJid: string;
   senderJid: string;
@@ -66,6 +71,9 @@ export interface DashboardChatMessage {
   reactions?: Record<string, number>;
   isViewOnce?: boolean;
   isDeleted?: boolean;
+  isEdited?: boolean;
+  editedAt?: string;
+  starred?: boolean;
   quoted?: {
     id: string;
     senderJid?: string;
@@ -103,8 +111,14 @@ export class ApiServer {
   // Live in-memory chat message buffer: chatJid -> DashboardChatMessage[] (latest 100)
   private liveMessageStore = new Map<string, DashboardChatMessage[]>();
 
+  // Retain early ACKs and metadata for history-only messages without creating bubbles.
+  private messageInfoStore = new Map<string, DashboardMessageInfo>();
+
+  private reactionStore = new Map<string, Map<string, { emoji: string; timestamp: number }>>();
+
   // Queue on mute: groupJid -> queued messages waiting for announce: false
-  private queuedGroupMessages = new Map<string, Array<{ text: string; queuedAt: string }>>();
+  private dashboardState = new DashboardState(config.SESSION_PATH);
+  private outboundQueue = new OutboundQueue((message) => this.deliverQueuedMessage(message));
 
   // Raw WAMessage cache for authentic quoted replies
   private rawMessageMap = new Map<string, WAMessage>();
@@ -186,6 +200,10 @@ export class ApiServer {
   handleIncomingMessage(msg: WAMessage): void {
     const chatJid = msg.key.remoteJid;
     if (!chatJid || !botSocket) return;
+    if (msg.message?.editedMessage?.message) {
+      this.applyMessageEdit(msg.key, msg.message.editedMessage.message, whatsappTimestamp(msg.messageTimestamp) || new Date().toISOString());
+      return;
+    }
 
     if (msg.key.id) {
       this.rawMessageMap.set(msg.key.id, msg);
@@ -210,31 +228,278 @@ export class ApiServer {
     this.io.to('auth').emit('contacts:updated', { count: Array.isArray(contacts) ? contacts.length : 0 });
   }
 
-  handleGroupsUpdate(updates: Partial<GroupMetadata>[]): void {
-    for (const update of updates) {
-      if (update.id && update.announce === false) {
-        // Group was unmuted / opened to all members! Drain queue if any
-        const queued = this.queuedGroupMessages.get(update.id);
-        if (queued && queued.length && botSocket) {
-          logger.info({ groupJid: update.id, count: queued.length }, 'Group unmuted! Draining queued messages');
-          this.queuedGroupMessages.delete(update.id);
-          for (const item of queued) {
-            botSocket.sendMessage(update.id, { text: item.text }).catch((err) => {
-              logger.warn({ err, groupJid: update.id }, 'Failed to deliver queued message upon unlock');
-            });
-          }
-          this.io.to('auth').emit('bot:activity', {
-            type: 'queue:drained',
-            groupJid: update.id,
-            count: queued.length,
-            timestamp: new Date().toISOString(),
-          });
-        }
+  private messageInfoKeys(chatJid: string, id: string): string[] {
+    const jid = chatJid.replace(/:\d+(?=@)/, '');
+    const alias = jid.endsWith('@lid') ? getPhoneFromLid(jid) : jid.endsWith('@s.whatsapp.net') ? getLidFromPhone(jid) : undefined;
+    return [...new Set([jid, alias].filter((value): value is string => Boolean(value)))].map((value) => `${value}\0${id}`);
+  }
+
+  private getMessageInfo(chatJid: string, id: string): DashboardMessageInfo {
+    return this.messageInfoKeys(chatJid, id).reduce(
+      (info, key) => {
+        const live = this.liveMessageStore.get(key.split('\0')[0])?.find((message) => message.id === id);
+        const stored = mergeMessageInfo(live || {}, this.messageInfoStore.get(key) || {});
+        return mergeMessageInfo(info, this.normalizeReceiptJids(stored));
+      },
+      {} as DashboardMessageInfo
+    );
+  }
+
+  private normalizeReceiptJids(info: DashboardMessageInfo): DashboardMessageInfo {
+    if (!info.receipts) return info;
+    return { ...info, receipts: info.receipts.map((receipt) => ({
+      ...receipt,
+      userJid: receipt.userJid.endsWith('@lid') ? getPhoneFromLid(receipt.userJid) || receipt.userJid : receipt.userJid,
+    })) };
+  }
+
+  private storeMessageInfo(chatJid: string, id: string, info: DashboardMessageInfo): void {
+    const keys = this.messageInfoKeys(chatJid, id);
+    for (const key of keys) this.messageInfoStore.delete(key);
+    this.messageInfoStore.set(keys[0], info);
+    if (this.messageInfoStore.size > 1000) {
+      this.messageInfoStore.delete(this.messageInfoStore.keys().next().value!);
+    }
+  }
+
+  private updateMessageInfo(key: WAMessageUpdate['key'], incoming: DashboardMessageInfo): void {
+    if (!key.remoteJid || !key.id || !Object.keys(incoming).length) return;
+    const info = mergeMessageInfo(this.getMessageInfo(key.remoteJid, key.id), this.normalizeReceiptJids(incoming),
+      Boolean(key.fromMe && /@(s\.whatsapp\.net|lid)$/.test(key.remoteJid)));
+    this.storeMessageInfo(key.remoteJid, key.id, info);
+    const chatJids = this.messageInfoKeys(key.remoteJid, key.id).map((value) => value.split('\0')[0]);
+    for (const chatJid of chatJids) {
+      const target = this.liveMessageStore.get(chatJid)?.find((m) => m.id === key.id);
+      if (target) Object.assign(target, info);
+      this.io.to('auth').emit('chat:message-info', { chatJid, messageId: key.id, ...info });
+    }
+  }
+
+  handleMessageUpdates(updates: WAMessageUpdate[]): void {
+    for (const { key, update } of updates) {
+      const edited = update.message?.editedMessage?.message;
+      if (edited) this.applyMessageEdit(key, edited, whatsappTimestamp(update.messageTimestamp) || new Date().toISOString());
+      this.updateMessageInfo(key, messageInfo(edited ? { ...update, messageTimestamp: undefined } : update));
+      if (typeof update.starred === 'boolean') {
+        const snapshot = update.starred && update.message && botSocket ? this.parseWAMessage({ ...update, key }, botSocket) || undefined : undefined;
+        this.applyStar(key, update.starred, snapshot);
       }
     }
   }
 
-  private addMessageToStore(chatMsg: DashboardChatMessage): void {
+  private applyMessageEdit(key: WAMessageUpdate['key'], message: NonNullable<WAMessage['message']>, editedAt: string): void {
+    if (!key.remoteJid || !key.id) return;
+    const inner = unwrapMessageInfo(message).message;
+    if (!inner) return;
+    const text = inner.conversation ?? inner.extendedTextMessage?.text ?? inner.imageMessage?.caption ?? inner.videoMessage?.caption ?? inner.documentMessage?.caption;
+    if (text == null) return;
+    const type = Object.keys(inner).find((name) => name !== 'messageContextInfo') || 'conversation';
+    const jids = this.messageInfoKeys(key.remoteJid, key.id).map((value) => value.split('\0')[0]);
+    for (const chatJid of jids) {
+      const previous = this.dashboardState.getEdit(chatJid, key.id);
+      if (previous && previous.editedAt > editedAt) continue;
+      editAiMemoryMessage(jids, key.id, text, type, editedAt);
+      if (!this.dashboardState.edit({ chatJid, messageId: key.id, text, type, editedAt })) continue;
+      const target = this.liveMessageStore.get(chatJid)?.find((entry) => entry.id === key.id);
+      if (target) Object.assign(target, { text, type, isEdited: true, editedAt });
+      const raw = this.rawMessageMap.get(key.id);
+      if (raw && jids.includes(raw.key.remoteJid || '')) raw.message = message;
+      const latest = this.chatLastActiveMap.get(chatJid);
+      if (target && latest?.timestamp === target.timestamp) latest.lastText = text;
+      this.io.to('auth').emit('chat:message-edited', { chatJid, messageId: key.id, text, type, isEdited: true, editedAt });
+    }
+  }
+
+  private applyStar(key: WAMessageUpdate['key'], starred: boolean, snapshot?: DashboardChatMessage): void {
+    if (!key.remoteJid || !key.id) return;
+    const jids = this.messageInfoKeys(key.remoteJid, key.id).map((value) => value.split('\0')[0]);
+    const chatJid = jids.find((jid) => jid.endsWith('@s.whatsapp.net')) || key.remoteJid;
+    const message = starred ? snapshot || this.findDashboardMessage(chatJid, key.id) : undefined;
+    this.dashboardState.star({ chatJid, messageId: key.id, fromMe: Boolean(key.fromMe), starredAt: new Date().toISOString(),
+      ...(message ? { message: { ...message, starred } } : {}) }, starred);
+    for (const chatJid of jids) {
+      const target = this.liveMessageStore.get(chatJid)?.find((message) => message.id === key.id);
+      if (target) target.starred = starred;
+      this.io.to('auth').emit('chat:message-starred', { chatJid, messageId: key.id, starred });
+    }
+  }
+
+  handleChatsUpdate(updates: Array<{ id?: string | null; ephemeralExpiration?: number | null }>): void {
+    for (const update of updates) {
+      if (!update.id || update.ephemeralExpiration === undefined) continue;
+      const duration = update.ephemeralExpiration || 0;
+      this.dashboardState.setTimer(update.id, duration);
+      this.io.to('auth').emit('chat:ephemeral', { chatJid: update.id, duration });
+    }
+  }
+
+  private applyDashboardState(message: DashboardChatMessage): DashboardChatMessage {
+    const edit = this.messageInfoKeys(message.chatJid, message.id).map((key) => {
+      const jid = key.split('\0')[0];
+      return this.dashboardState.getEdit(jid, message.id);
+    }).filter((value) => Boolean(value)).sort((a, b) => b!.editedAt.localeCompare(a!.editedAt))[0];
+    if (edit) Object.assign(message, { text: edit.text, type: edit.type, isEdited: true, editedAt: edit.editedAt });
+    message.starred = this.messageInfoKeys(message.chatJid, message.id).some((key) => this.dashboardState.isStarred(key.split('\0')[0], message.id));
+    return message;
+  }
+
+  private findDashboardMessage(chatJid: string, id: string): DashboardChatMessage | undefined {
+    const jids = this.messageInfoKeys(chatJid, id).map((value) => value.split('\0')[0]);
+    for (const jid of jids) {
+      const live = this.liveMessageStore.get(jid)?.find((message) => message.id === id);
+      if (live) return this.applyDashboardState({ ...live });
+    }
+    const entry = findAiMemoryMessage(jids, id);
+    if (entry) return this.applyDashboardState({ ...entry, id, timestamp: entry.ts, type: entry.messageType });
+    for (const jid of jids) {
+      const recovered = findStoredMessageById(jid, id);
+      if (recovered) return this.applyDashboardState({ ...recovered, id, type: recovered.messageType });
+    }
+    return undefined;
+  }
+
+  private accountJid(): string {
+    let jid = botSocket?.user?.id || '';
+    if (!jid) {
+      try { jid = JSON.parse(fs.readFileSync(path.join(config.SESSION_PATH, 'creds.json'), 'utf8')).me?.id || ''; } catch {}
+    }
+    return jid.replace(/:\d+(?=@)/, '');
+  }
+
+  private async enqueueChat(jid: string, text: string, mentionAll: boolean, quotedMessageId?: string, requestId?: string): Promise<string> {
+    const raw = quotedMessageId ? this.rawMessageMap.get(quotedMessageId) : undefined;
+    if (quotedMessageId && (!raw || !this.messageInfoKeys(jid, quotedMessageId).some((key) => key.split('\0')[0] === raw.key.remoteJid))) {
+      throw new Error('Quoted message is unavailable for queueing.');
+    }
+    const quoted = raw ? { key: raw.key, messageTimestamp: Number(raw.messageTimestamp) || 0,
+      message: { conversation: this.findDashboardMessage(jid, quotedMessageId!)?.text || '[Quoted message]' } } : undefined;
+    return this.outboundQueue.enqueue({ chatJid: jid, accountJid: this.accountJid(), text: text.trim(), mentionAll, quoted }, requestId);
+  }
+
+  private async deliverQueuedMessage(message: OutboundMessage): Promise<boolean> {
+    const socket = botSocket;
+    if (!socket) return false;
+    if (socket.user?.id?.replace(/:\d+(?=@)/, '') !== message.accountJid) {
+      throw new UnrecoverableError('Queued message belongs to another WhatsApp account.');
+    }
+    let mentions: string[] | undefined;
+    let duration = this.dashboardState.timer(message.chatJid);
+    if (message.chatJid.endsWith('@g.us')) {
+      const metadata = await socket.groupMetadata(message.chatJid);
+      const me = metadata.participants.find((participant) => [socket.user?.id, socket.user?.lid].some((jid) => jid && this.reactionSenderJid(jid) === this.reactionSenderJid(participant.id)));
+      if (!me) throw new UnrecoverableError('Bot is no longer a member of this group.');
+      if (metadata.announce && !me.admin) return false;
+      if (message.mentionAll || /(?:^|\s)@(everyone|all)\b/i.test(message.text)) mentions = metadata.participants.map((participant) => participant.id);
+      duration = metadata.ephemeralDuration;
+    }
+    const sent = await socket.sendMessage(message.chatJid, { text: message.text, mentions }, {
+      messageId: message.messageId, quoted: message.quoted, ephemeralExpiration: duration,
+    });
+    if (!sent?.key.id) throw new Error('WhatsApp did not return a queued message ID.');
+    if (botSocket === socket) this.handleIncomingMessage(sent);
+    this.io.to('auth').emit('bot:activity', { type: 'queue:sent', groupJid: message.chatJid, messageId: sent.key.id, timestamp: new Date().toISOString() });
+    return true;
+  }
+
+  private chatSendOptions(chatJid: string, quoted?: WAMessage) {
+    return { quoted, ephemeralExpiration: this.dashboardState.timer(chatJid) };
+  }
+
+  handleMessageReceipts(updates: MessageUserReceiptUpdate[]): void {
+    for (const { key, receipt } of updates) {
+      const parsed = receiptInfo(receipt);
+      if (!parsed) continue;
+      this.updateMessageInfo(key, { receipts: [parsed] });
+    }
+  }
+
+  private reactionSenderJid(jid: string): string {
+    const normalized = jid.replace(/:\d+(?=@)/, '');
+    return normalized.endsWith('@lid') ? getPhoneFromLid(normalized) || normalized : normalized;
+  }
+
+  private getReactionState(chatJid: string, messageId: string): Map<string, { emoji: string; timestamp: number }> {
+    const state = new Map<string, { emoji: string; timestamp: number }>();
+    for (const key of this.messageInfoKeys(chatJid, messageId)) {
+      for (const [sender, reaction] of this.reactionStore.get(key) || []) {
+        const jid = this.reactionSenderJid(sender);
+        if (!state.has(jid) || state.get(jid)!.timestamp <= reaction.timestamp) state.set(jid, reaction);
+      }
+    }
+    return state;
+  }
+
+  private reactionCounts(state: Map<string, { emoji: string; timestamp: number }>): Record<string, number> {
+    const counts: Record<string, number> = Object.create(null);
+    for (const { emoji } of state.values()) {
+      if (emoji) counts[emoji] = (counts[emoji] || 0) + 1;
+    }
+    return counts;
+  }
+
+  private applyReaction(chatJid: string, messageId: string, senderJid: string, emoji: string, timestamp: number): void {
+    if (!chatJid || !messageId || !senderJid) return;
+    const sender = this.reactionSenderJid(senderJid);
+    const keys = this.messageInfoKeys(chatJid, messageId);
+    const state = this.getReactionState(chatJid, messageId);
+    const previous = state.get(sender);
+    // Keep removal tombstones so a delayed add cannot resurrect an old reaction.
+    if (timestamp && previous && timestamp < previous.timestamp) return;
+    state.set(sender, { emoji, timestamp: timestamp || previous?.timestamp || 0 });
+    for (const key of keys) this.reactionStore.delete(key);
+    this.reactionStore.set(keys[0], state);
+    if (this.reactionStore.size > 1000) this.reactionStore.delete(this.reactionStore.keys().next().value!);
+    const reactions = this.reactionCounts(state);
+    for (const key of keys) {
+      const jid = key.split('\0')[0];
+      const target = this.liveMessageStore.get(jid)?.find((message) => message.id === messageId);
+      if (target) target.reactions = reactions;
+      if (previous?.emoji !== emoji) {
+        this.io.to('auth').emit('chat:reaction', { chatJid: jid, messageId, senderJid: sender, emoji, reactions });
+      }
+    }
+  }
+
+  handleMessageReactions(updates: BaileysEventMap['messages.reaction']): void {
+    for (const { key, reaction } of updates) {
+      const actor = reaction.key;
+      const sender = actor?.fromMe ? botSocket?.user?.id : actor?.participant || actor?.remoteJid;
+      if (key.remoteJid && key.id && sender) {
+        this.applyReaction(key.remoteJid, key.id, sender, reaction.text || '', Number(reaction.senderTimestampMs) || 0);
+      }
+    }
+  }
+
+  handleGroupsUpdate(updates: Partial<GroupMetadata>[]): void {
+    for (const update of updates) {
+      if (update.id) {
+        this.groupMetadataCache.delete(update.id);
+        if (update.ephemeralDuration != null) this.handleChatsUpdate([{ id: update.id, ephemeralExpiration: update.ephemeralDuration }]);
+      }
+      if (update.id && update.announce === false) {
+        // Group was unmuted / opened to all members! Drain queue if any
+        // BullMQ retries delayed messages against fresh group permissions.
+        this.io.to('auth').emit('bot:activity', { type: 'queue:unlocked', groupJid: update.id, timestamp: new Date().toISOString() });
+      }
+    }
+  }
+
+  private addMessageToStore(chatMsg: DashboardChatMessage, source?: WAMessage): void {
+    const raw = source || this.rawMessageMap.get(chatMsg.id);
+    const rawInfo = raw?.key.remoteJid === chatMsg.chatJid ? this.normalizeReceiptJids(messageInfo(raw)) : {};
+    let info = mergeMessageInfo(rawInfo, this.getMessageInfo(chatMsg.chatJid, chatMsg.id));
+    const senderJid = chatMsg.senderJid.replace(/:\d+(?=@)/, '');
+    info.senderLid = info.senderLid || (senderJid.endsWith('@lid') ? senderJid : getLidFromPhone(senderJid));
+    if (!info.senderLid) delete info.senderLid;
+    info = mergeMessageInfo(info, {}, chatMsg.fromMe && /@(s\.whatsapp\.net|lid)$/.test(chatMsg.chatJid));
+    Object.assign(chatMsg, info);
+    this.storeMessageInfo(chatMsg.chatJid, chatMsg.id, info);
+    if (raw?.reactions?.length) {
+      this.handleMessageReactions(raw.reactions.map((reaction) => ({ key: raw.key, reaction })));
+    }
+    const reactionState = this.getReactionState(chatMsg.chatJid, chatMsg.id);
+    if (reactionState.size) chatMsg.reactions = this.reactionCounts(reactionState);
+    this.applyDashboardState(chatMsg);
     const list = this.liveMessageStore.get(chatMsg.chatJid) || [];
     const existingIndex = list.findIndex((m) => m.id === chatMsg.id);
     if (existingIndex >= 0) {
@@ -244,6 +509,7 @@ export class ApiServer {
       if (list.length > 100) list.shift();
     }
     this.liveMessageStore.set(chatMsg.chatJid, list);
+    if (typeof raw?.starred === 'boolean') this.applyStar(raw.key, raw.starred);
 
     this.chatLastActiveMap.set(chatMsg.chatJid, {
       timestamp: chatMsg.timestamp,
@@ -268,23 +534,9 @@ export class ApiServer {
     if (innerMsg?.reactionMessage) {
       const react = innerMsg.reactionMessage;
       if (react.key?.id) {
-        const targetId = react.key.id;
-        const targetChatJid = react.key.remoteJid || chatJid;
-        const targetList = this.liveMessageStore.get(targetChatJid);
-        const targetMsg = targetList?.find((m) => m.id === targetId);
-        const emoji = react.text || '';
-        if (targetMsg) {
-          if (!targetMsg.reactions) targetMsg.reactions = {};
-          if (emoji) {
-            targetMsg.reactions[emoji] = (targetMsg.reactions[emoji] || 0) + 1;
-          }
-        }
-        this.io.to('auth').emit('chat:reaction', {
-          chatJid: targetChatJid,
-          messageId: targetId,
-          emoji,
-          senderJid: sender.jid,
-        });
+        this.applyReaction(react.key.remoteJid || chatJid, react.key.id,
+          msg.key.fromMe ? socket.user?.id || sender.jid : sender.jid,
+          react.text || '', Number(react.senderTimestampMs) || 0);
       }
       return null;
     }
@@ -292,6 +544,11 @@ export class ApiServer {
     // 2. Intercept incoming protocolMessage: revocations or internal stanzas (NEVER add as message bubble!)
     if (innerMsg?.protocolMessage) {
       const proto = innerMsg.protocolMessage;
+      // WhatsApp ProtocolMessage.Type.MESSAGE_EDIT = 14.
+      if (proto.type === 14 && proto.key?.id && proto.editedMessage) {
+        this.applyMessageEdit({ ...proto.key, remoteJid: proto.key.remoteJid || chatJid }, proto.editedMessage,
+          proto.timestampMs ? new Date(Number(proto.timestampMs)).toISOString() : new Date().toISOString());
+      }
       if (proto.type === 0 && proto.key?.id) {
         const targetId = proto.key.id;
         const targetChatJid = proto.key.remoteJid || chatJid;
@@ -566,6 +823,7 @@ export class ApiServer {
 
   setBotSocket(socket: WASocket) {
     botSocket = socket;
+    this.outboundQueue.start();
     this.authQR = null;
     this.pairingCode = null;
     this.io.emit('bot:connected', this.getStatusPayload(true));
@@ -964,6 +1222,90 @@ export class ApiServer {
     // -------------------------------------------------------------------------
     // CHAT MESSAGE HISTORY API (READ REAL MESSAGES)
     // -------------------------------------------------------------------------
+    this.app.get('/api/starred-messages', this.requireDashboardAuth.bind(this), (_req, res) => {
+      const messages = this.dashboardState.listStars().map((record) => ({ ...record,
+        message: this.findDashboardMessage(record.chatJid, record.messageId) || record.message,
+      }));
+      res.json({ success: true, messages });
+    });
+
+    this.app.post('/api/chats/:jid/star', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid);
+      const { messageId, starred } = req.body || {};
+      if (typeof messageId !== 'string' || typeof starred !== 'boolean') {
+        res.status(400).json({ success: false, error: 'Message ID and starred boolean are required.' }); return;
+      }
+      if (!botSocket) { res.status(503).json({ success: false, error: 'Bot is not connected.' }); return; }
+      const message = this.findDashboardMessage(jid, messageId);
+      const stored = this.dashboardState.listStars().find((record) => this.messageInfoKeys(jid, messageId).some((key) => key.split('\0')[0] === record.chatJid) && record.messageId === messageId);
+      if (!message && !stored) { res.status(404).json({ success: false, error: 'Message not found.' }); return; }
+      try {
+        const key = { remoteJid: jid, id: messageId, fromMe: message?.fromMe ?? stored!.fromMe };
+        await botSocket.chatModify({ star: { messages: [{ id: messageId, fromMe: key.fromMe }], star: starred } }, jid);
+        this.applyStar(key, starred);
+        res.json({ success: true, starred });
+      } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
+    });
+
+    this.app.post('/api/chats/:jid/edit-message', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid);
+      const { messageId, text } = req.body || {};
+      if (typeof messageId !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 65000) {
+        res.status(400).json({ success: false, error: 'Message ID and non-empty text are required.' }); return;
+      }
+      const message = this.findDashboardMessage(jid, messageId);
+      if (!message) { res.status(404).json({ success: false, error: 'Message not found.' }); return; }
+      if (!message.fromMe || message.media || message.poll || message.contact || message.location || message.isDeleted || Date.now() - new Date(message.timestamp).getTime() > 15 * 60_000) {
+        res.status(403).json({ success: false, error: 'Only your text messages sent within 15 minutes can be edited.' }); return;
+      }
+      if (!botSocket) { res.status(503).json({ success: false, error: 'Bot is not connected.' }); return; }
+      try {
+        const raw = this.rawMessageMap.get(messageId);
+        const key = raw?.key.remoteJid === jid ? raw.key : { remoteJid: jid, id: messageId, fromMe: true };
+        await botSocket.sendMessage(jid, { text: text.trim(), edit: key });
+        this.applyMessageEdit(key, { conversation: text.trim() }, new Date().toISOString());
+        res.json({ success: true });
+      } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
+    });
+
+    this.app.get('/api/chats/:jid/ephemeral', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid);
+      try {
+        if (jid.endsWith('@g.us') && botSocket) {
+          const metadata = await botSocket.groupMetadata(jid);
+          this.dashboardState.setTimer(jid, metadata.ephemeralDuration || 0);
+        }
+        res.json({ success: true, duration: this.dashboardState.timer(jid) ?? null });
+      } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
+    });
+
+    this.app.post('/api/chats/:jid/ephemeral', this.requireDashboardAuth.bind(this), async (req, res) => {
+      const jid = String(req.params.jid);
+      const { duration } = req.body || {};
+      if (!/@(g\.us|s\.whatsapp\.net|lid)$/.test(jid) || ![0, 86400, 604800, 7776000].includes(duration)) {
+        res.status(400).json({ success: false, error: 'Choose Off, 24 hours, 7 days, or 90 days for a direct chat or group.' }); return;
+      }
+      if (!botSocket) { res.status(503).json({ success: false, error: 'Bot is not connected.' }); return; }
+      try {
+        await botSocket.sendMessage(jid, { disappearingMessagesInChat: duration });
+        this.handleChatsUpdate([{ id: jid, ephemeralExpiration: duration }]);
+        res.json({ success: true, duration });
+      } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
+    });
+
+    this.app.get('/api/outbound', this.requireDashboardAuth.bind(this), async (_req, res) => {
+      try { res.json({ success: true, messages: await this.outboundQueue.list() }); }
+      catch (err: any) { res.status(503).json({ success: false, error: err.message }); }
+    });
+    this.app.post('/api/outbound/:id/retry', this.requireDashboardAuth.bind(this), async (req, res) => {
+      try { await this.outboundQueue.retry(String(req.params.id)); res.json({ success: true }); }
+      catch (err: any) { res.status(400).json({ success: false, error: err.message }); }
+    });
+    this.app.delete('/api/outbound/:id', this.requireDashboardAuth.bind(this), async (req, res) => {
+      try { await this.outboundQueue.cancel(String(req.params.id)); res.json({ success: true }); }
+      catch (err: any) { res.status(400).json({ success: false, error: err.message }); }
+    });
+
     this.app.get('/api/chats/:jid/messages', this.requireDashboardAuth.bind(this), async (req, res) => {
       const jid = String(req.params.jid || '');
       const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 60));
@@ -1018,6 +1360,7 @@ export class ApiServer {
             const mediaUrl = item.media ? `/api/vault/media/${encodeURIComponent(item.messageId)}?chatJid=${encodeURIComponent(jid)}` : undefined;
 
             messageMap.set(item.messageId, {
+              ...existing,
               id: item.messageId,
               chatJid: item.chatJid,
               senderJid: item.senderJid,
@@ -1036,6 +1379,11 @@ export class ApiServer {
       } catch {}
 
       const sorted = Array.from(messageMap.values())
+        .map((message) => {
+          const reactions = this.getReactionState(jid, message.id);
+          return this.applyDashboardState({ ...message, ...this.getMessageInfo(jid, message.id),
+            ...(reactions.size ? { reactions: this.reactionCounts(reactions) } : {}) });
+        })
         .filter(
           (m) =>
             !['protocolMessage', 'reactionMessage', 'senderKeyDistributionMessage', 'peerDataOperationRequestMessage'].includes(m.type) &&
@@ -1107,13 +1455,20 @@ export class ApiServer {
     // SEND CHAT (TEXT, WITH ADMIN-ONLY BYPASS OR QUEUE ON MUTE)
     // -------------------------------------------------------------------------
     this.app.post('/api/chats/send', this.requireDashboardAuth.bind(this), async (req, res) => {
-      const { jid, text, bypassAdminOnly, queueOnUnlock, queueOnMute, quotedMessageId } = req.body || {};
-      if (!jid || !text?.trim()) {
+      const { jid, text, bypassAdminOnly, queueOnUnlock, queueOnMute, queueOnOffline, quotedMessageId, requestId } = req.body || {};
+      if (typeof jid !== 'string' || typeof text !== 'string' || !text.trim() || (requestId !== undefined && (typeof requestId !== 'string' || requestId.length > 128))) {
         res.status(400).json({ success: false, error: 'JID and text are required.' });
         return;
       }
 
       if (!botSocket) {
+        if (queueOnOffline || queueOnUnlock || queueOnMute) {
+          try {
+            const jobId = await this.enqueueChat(jid, text, Boolean(req.body.mentionAll), quotedMessageId, requestId);
+            res.json({ success: true, queued: true, jobId, note: 'Message queued until WhatsApp reconnects and chat permissions allow sending.' });
+          } catch (err: any) { res.status(503).json({ success: false, error: err.message }); }
+          return;
+        }
         res.status(503).json({ success: false, error: 'Bot is not connected to WhatsApp.' });
         return;
       }
@@ -1164,12 +1519,11 @@ export class ApiServer {
 
           if (isAnnounce && !isBotAdmin) {
               if (shouldQueue) {
-                const list = this.queuedGroupMessages.get(jid) || [];
-                list.push({ text: text.trim(), queuedAt: new Date().toISOString() });
-                this.queuedGroupMessages.set(jid, list);
+                const jobId = await this.enqueueChat(jid, text, Boolean(req.body.mentionAll), quotedMessageId, requestId);
                 res.json({
                   success: true,
                   queued: true,
+                  jobId,
                   note: 'Message queued! It will automatically dispatch as soon as the group is unmuted by admins.',
                 });
                 return;
@@ -1179,7 +1533,7 @@ export class ApiServer {
                 const sent = await botSocket.sendMessage(
                   jid,
                   { text: text.trim(), mentions },
-                  rawQuoted ? { quoted: rawQuoted } : undefined
+                  this.chatSendOptions(jid, rawQuoted)
                 );
                 if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
                 this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
@@ -1201,7 +1555,7 @@ export class ApiServer {
                   const sent = await botSocket.sendMessage(
                     jid,
                     { text: text.trim(), mentions },
-                    rawQuoted ? { quoted: rawQuoted } : undefined
+                    this.chatSendOptions(jid, rawQuoted)
                   );
                   await botSocket.groupSettingUpdate(jid, 'announcement');
                   if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -1214,7 +1568,7 @@ export class ApiServer {
                   const sent = await botSocket.sendMessage(
                     jid,
                     { text: text.trim(), mentions },
-                    rawQuoted ? { quoted: rawQuoted } : undefined
+                    this.chatSendOptions(jid, rawQuoted)
                   );
                   if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
                   this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
@@ -1225,7 +1579,7 @@ export class ApiServer {
                 const sent = await botSocket.sendMessage(
                   jid,
                   { text: text.trim(), mentions },
-                  rawQuoted ? { quoted: rawQuoted } : undefined
+                  this.chatSendOptions(jid, rawQuoted)
                 );
                 if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
                 this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
@@ -1238,7 +1592,7 @@ export class ApiServer {
         const sent = await botSocket.sendMessage(
           jid,
           { text: text.trim(), mentions },
-          rawQuoted ? { quoted: rawQuoted } : undefined
+          this.chatSendOptions(jid, rawQuoted)
         );
         if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
         this.recordOutgoingChatMessage(jid, sent?.key.id || undefined, text.trim(), 'conversation', quotedContext);
@@ -1304,7 +1658,7 @@ export class ApiServer {
         let sent: any;
         let kind = 'document';
 
-        const sendOpts = rawQuoted ? { quoted: rawQuoted } : undefined;
+        const sendOpts = this.chatSendOptions(jid, rawQuoted);
 
         if (effectiveMime.startsWith('image/') && !effectiveMime.includes('webp')) {
           kind = 'image';
@@ -1389,7 +1743,7 @@ export class ApiServer {
           isViewOnce: Boolean(viewOnce),
           quoted: quotedContext,
         };
-        this.addMessageToStore(msgObj);
+        this.addMessageToStore(msgObj, sent);
         this.io.to('auth').emit('chat:message', msgObj);
 
         res.json({ success: true, messageId: sent?.key.id, kind });
@@ -1421,7 +1775,7 @@ export class ApiServer {
             name: name || undefined,
             address: address || undefined,
           },
-        });
+        }, this.chatSendOptions(jid));
 
         const msgObj: DashboardChatMessage = {
           id: sent?.key.id || `loc-${Date.now()}`,
@@ -1440,7 +1794,7 @@ export class ApiServer {
             address: address || undefined,
           },
         };
-        this.addMessageToStore(msgObj);
+        this.addMessageToStore(msgObj, sent);
         this.io.to('auth').emit('chat:message', msgObj);
 
         res.json({ success: true, messageId: sent?.key.id });
@@ -1479,7 +1833,7 @@ export class ApiServer {
             displayName,
             contacts: [{ vcard }],
           },
-        });
+        }, this.chatSendOptions(jid));
 
         const msgObj: DashboardChatMessage = {
           id: sent?.key.id || `contact-${Date.now()}`,
@@ -1496,7 +1850,7 @@ export class ApiServer {
             vcard,
           },
         };
-        this.addMessageToStore(msgObj);
+        this.addMessageToStore(msgObj, sent);
         this.io.to('auth').emit('chat:message', msgObj);
 
         res.json({ success: true, messageId: sent?.key.id });
@@ -1532,7 +1886,7 @@ export class ApiServer {
 
         const sent = await botSocket.sendMessage(jid, {
           sticker: webpBuffer,
-        });
+        }, this.chatSendOptions(jid));
 
         const msgObj: DashboardChatMessage = {
           id: sent?.key.id || `sticker-${Date.now()}`,
@@ -1550,7 +1904,7 @@ export class ApiServer {
             size: webpBuffer.length,
           },
         };
-        this.addMessageToStore(msgObj);
+        this.addMessageToStore(msgObj, sent);
         this.io.to('auth').emit('chat:message', msgObj);
 
         res.json({ success: true, messageId: sent?.key.id });
@@ -1575,7 +1929,8 @@ export class ApiServer {
       }
 
       try {
-        await botSocket.sendMessage(jid, {
+        const socket = botSocket;
+        const sent = await socket.sendMessage(jid, {
           react: {
             text: emoji || '', // empty string removes reaction
             key: {
@@ -1587,11 +1942,8 @@ export class ApiServer {
           },
         });
 
-        this.io.to('auth').emit('chat:reaction', {
-          chatJid: jid,
-          messageId,
-          emoji: emoji || '',
-        });
+        this.applyReaction(jid, messageId, socket.user?.id || socket.user?.lid || '', emoji || '',
+          Number(sent?.message?.reactionMessage?.senderTimestampMs) || Date.now());
 
         res.json({ success: true });
       } catch (err: any) {
@@ -1919,7 +2271,7 @@ export class ApiServer {
               selectableCount: Math.min(options.length, Math.max(1, Number(selectableCount) || 1)),
             },
           },
-          rawQuoted ? { quoted: rawQuoted } : undefined
+          this.chatSendOptions(jid, rawQuoted)
         );
 
         if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
@@ -1941,7 +2293,7 @@ export class ApiServer {
           },
           quoted: quotedContext,
         };
-        this.addMessageToStore(msgObj);
+        this.addMessageToStore(msgObj, sent);
         this.io.to('auth').emit('chat:message', msgObj);
 
         res.json({ success: true, messageId: sent?.key.id });
@@ -2579,7 +2931,7 @@ export class ApiServer {
         const sent = await botSocket.sendMessage(
           item.chatJid,
           { text: item.text, mentions },
-          rawQuoted ? { quoted: rawQuoted } : undefined
+          this.chatSendOptions(item.chatJid, rawQuoted)
         );
         if (sent?.key.id) this.rawMessageMap.set(sent.key.id, sent);
         this.recordOutgoingChatMessage(item.chatJid, sent?.key.id || undefined, item.text, 'conversation');
@@ -2654,6 +3006,7 @@ export class ApiServer {
     }
     this.server.close();
     this.io.close();
+    void this.outboundQueue.close().catch((err) => logger.warn({ err }, 'Failed to close outbound queue'));
   }
 
   getIO(): SocketIOServer {
